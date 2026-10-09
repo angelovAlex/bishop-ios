@@ -7,8 +7,12 @@ options:
 settings:
   base:
     SWIFT_VERSION: "5.0"          # Swift 5 language mode: no strict-concurrency noise
-    CODE_SIGNING_ALLOWED: "NO"    # simulator builds without a team
     ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+    # Real device builds need a team; the simulator does not and Xcode disables
+    # signing for that destination by itself. V2QLY6F32J is the personal team
+    # whose wildcard profile already lists the phones.
+    DEVELOPMENT_TEAM: V2QLY6F32J
+    CODE_SIGN_STYLE: Automatic
 targets:
   Bishop:
     type: application
@@ -25,7 +29,15 @@ targets:
           - UIInterfaceOrientationLandscapeLeft
           - UIInterfaceOrientationLandscapeRight
         # The Mac speaks plain HTTP on the LAN, at the address in BishopAPI.
-        # The Bonjour name Alexs-MacBook-Pro.local is only a fallback candidate,
-        # so no local-network permission (NSBonjourServices) is needed.
         NSAppTransportSecurity:
           NSAllowsArbitraryLoads: true
+        # iOS refuses ANY connection to a local network address without this, and
+        # shows its "find devices on your local network" prompt before the first
+        # request. It is not only for mDNS: without the key the app is silently
+        # denied and looks like it cannot reach the Mac at all.
+        NSLocalNetworkUsageDescription: Bishop talks to your Mac on the local network.
+        # Filled in at build time from the shell, so the token does not have to be
+        # typed on the phone's keyboard and never enters the repo:
+        #   xcodebuild ... BISHOP_TOKEN=$(cat ~/.bishop_web_token)
+        BISHOP_TOKEN: $(BISHOP_TOKEN)
+        BISHOP_HOST: $(BISHOP_HOST)

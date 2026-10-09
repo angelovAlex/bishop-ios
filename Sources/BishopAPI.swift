@@ -82,20 +82,32 @@ final class BishopAPI: ObservableObject {
     /// (or the last address that answered), then DEFAULT_HOST, then the Mac's
     /// Bonjour name - which follows a new DHCP lease without any discovery code -
     /// and finally localhost, which is where the simulator sees the Mac.
+    ///
+    /// The .local name is tried LAST on purpose: on a real phone it resolves
+    /// fine, but it resolves to the Mac's OWN address whatever this device is
+    /// (Bonjour on the Mac publishes every interface), so 127.0.0.1 inside the
+    /// (fall)back list resolves to the phone itself and costs a connection
+    /// timeout whenever it is reached.
     var candidates: [String] {
         let saved = UserDefaults.standard.string(forKey: "host") ?? ""
-        return [saved, Self.DEFAULT_HOST,
-                "Alexs-MacBook-Pro.local:8420", "127.0.0.1:8420"].filter { !$0.isEmpty }
+        var out = [saved, Self.DEFAULT_HOST, "Alexs-MacBook-Pro.local:8420"]
+        #if targetEnvironment(simulator)
+        out.append("127.0.0.1:8420")     // the simulator shares the Mac's loopback
+        #endif
+        return out.filter { !$0.isEmpty }
     }
 
     /// The address and token last used. Read once, here: connect() must never
-    /// re-read them, or it would throw away what Alex just typed in. The
-    /// BISHOP_HOST / BISHOP_TOKEN environment wins when set, which is how the
-    /// simulator is driven from a script (xcrun simctl launch with SIMCTL_CHILD_*).
+    /// re-read them, or it would throw away what Alex just typed in. Order: the
+    /// environment (SIMCTL_CHILD_* drives the simulator from a script; a real
+    /// device gets BISHOP_TOKEN baked into Info.plist at build time, below),
+    /// then what was saved, then whatever the build put in the plist.
     init() {
         let env = ProcessInfo.processInfo.environment
-        host = env["BISHOP_HOST"] ?? UserDefaults.standard.string(forKey: "host") ?? ""
-        token = env["BISHOP_TOKEN"] ?? UserDefaults.standard.string(forKey: "token") ?? ""
+        let plist = Bundle.main.object(forInfoDictionaryKey: "BISHOP_TOKEN") as? String ?? ""
+        let plistHost = Bundle.main.object(forInfoDictionaryKey: "BISHOP_HOST") as? String ?? ""
+        host = env["BISHOP_HOST"] ?? (UserDefaults.standard.string(forKey: "host") ?? plistHost)
+        token = env["BISHOP_TOKEN"] ?? (UserDefaults.standard.string(forKey: "token") ?? plist)
     }
 
     func save() {

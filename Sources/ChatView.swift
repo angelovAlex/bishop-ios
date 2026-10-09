@@ -27,7 +27,19 @@ struct ChatView: View {
         }
         .background(Color.black)
         .preferredColorScheme(.dark)
-        .task { await api.connect(); await reload() }
+        .task {
+            // Keep trying until the Mac answers. iOS asks "find devices on your
+            // local network" the first time the app touches 192.168.x.x, and the
+            // FIRST request is refused while that prompt is on screen - a single
+            // attempt would leave the app sitting on "Not connected" until it was
+            // relaunched by hand.
+            await reload()
+            while !api.connected && !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 4_000_000_000)
+                if Task.isCancelled { break }
+                await reload()
+            }
+        }
         .onAppear { startStream() }
         .sheet(item: Binding(get: { fullPicture.map(PicturePath.init) }, set: { fullPicture = $0?.path })) {
             PictureView(path: $0.path, api: api)
