@@ -98,21 +98,32 @@ final class BishopAPI: ObservableObject {
     }
 
     /// The address and token last used. Read once, here: connect() must never
-    /// re-read them, or it would throw away what Alex just typed in. Order: the
-    /// environment (SIMCTL_CHILD_* drives the simulator from a script; a real
-    /// device gets BISHOP_TOKEN baked into Info.plist at build time, below),
-    /// then what was saved, then whatever the build put in the plist.
+    /// re-read them, or it would throw away what Alex just typed in.
+    ///
+    /// The first NON-EMPTY value wins: the environment (SIMCTL_CHILD_* drives the
+    /// simulator from a script), then what was saved, then what the build baked
+    /// into Info.plist. Emptiness matters - the very first run of a build with no
+    /// token saved "" into UserDefaults, and because "" is not nil it then
+    /// shadowed the token baked into every later build, so the app sat on "Not
+    /// connected" until the token was pasted by hand on the phone's keyboard.
     init() {
         let env = ProcessInfo.processInfo.environment
-        let plist = Bundle.main.object(forInfoDictionaryKey: "BISHOP_TOKEN") as? String ?? ""
-        let plistHost = Bundle.main.object(forInfoDictionaryKey: "BISHOP_HOST") as? String ?? ""
-        host = env["BISHOP_HOST"] ?? (UserDefaults.standard.string(forKey: "host") ?? plistHost)
-        token = env["BISHOP_TOKEN"] ?? (UserDefaults.standard.string(forKey: "token") ?? plist)
+        func pick(_ values: String?...) -> String {
+            for v in values where !(v ?? "").isEmpty { return v! }
+            return ""
+        }
+        host = pick(env["BISHOP_HOST"], UserDefaults.standard.string(forKey: "host"),
+                    Bundle.main.object(forInfoDictionaryKey: "BISHOP_HOST") as? String)
+        token = pick(env["BISHOP_TOKEN"], UserDefaults.standard.string(forKey: "token"),
+                     Bundle.main.object(forInfoDictionaryKey: "BISHOP_TOKEN") as? String)
     }
 
+    /// Remember only what is worth remembering: saving "" would shadow the token
+    /// the build baked into Info.plist (see init), so a phone with nothing to
+    /// remember is not "helped" into having nothing to use.
     func save() {
-        UserDefaults.standard.set(host, forKey: "host")
-        UserDefaults.standard.set(token, forKey: "token")
+        if !host.isEmpty { UserDefaults.standard.set(host, forKey: "host") }
+        if !token.isEmpty { UserDefaults.standard.set(token, forKey: "token") }
     }
 
     /// Try every candidate address once; keep the first that answers /api/state.
