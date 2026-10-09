@@ -299,7 +299,8 @@ struct ChatView: View {
         Task { await api.stopTurn() }
     }
 
-    private func addPhotos(_ items: [PhotosPickerItem]) async {        for item in items {
+    private func addPhotos(_ items: [PhotosPickerItem]) async {
+        for item in items {
             if let data = try? await item.loadTransferable(type: Data.self),
                let path = await api.upload(data) {
                 attachments.append((path, "photo"))
