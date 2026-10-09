@@ -15,6 +15,7 @@
 //    POST /api/upload             raw image bytes -> saved path
 //    POST /api/effort             {effort}
 //    POST /api/speech/stop        shut Bishop up
+//    POST /api/chat/stop          stop the turn in flight
 //    POST /api/restart            reload the server (and so a webui.py change)
 //
 
@@ -326,6 +327,13 @@ final class BishopAPI: ObservableObject {
 
     func stopSpeech() async { _ = try? await post("/api/speech/stop") }
     func restartServer() async { _ = try? await post("/api/restart") }
+
+    /// Stop the turn in flight (the composer's square button). The Mac keeps what
+    /// was written so far as the answer, ends the turn, and the stream's 'end'
+    /// event clears `busy` - so this only has to send the request.
+    func stopTurn() async {
+        _ = try? await post("/api/chat/stop")
+    }
 
     /// Raw bytes (a photo) as an upload; returns the path the Mac saved it to.
     func upload(_ data: Data) async -> String? {

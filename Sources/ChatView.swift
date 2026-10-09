@@ -248,15 +248,22 @@ struct ChatView: View {
                     .textFieldStyle(.plain)
                     .padding(.vertical, 8)
                     .font(.system(size: 16, design: .monospaced))   // 16pt: iOS never zoom-scales
-                    .submitLabel(.send)
-                    .onSubmit { send() }        // a hardware keyboard's return sends
-                Button { send() } label: {
-                    Image(systemName: "arrow.up").font(.system(size: 16, weight: .bold))
+                // No .submitLabel/.onSubmit on purpose: a multiline TextField
+                // with neither keeps the keyboard's return key as what it says -
+                // a NEW LINE. Sending is the round button's job, so a reply can
+                // be written in several lines without it flying off mid-thought.
+                Button { api.busy ? stop() : send() } label: {
+                    // One button, two jobs: a turn in flight turns it into the
+                    // stop square, and pressing it ends the turn (the stream's
+                    // 'end' then clears busy). While idle it is the send arrow.
+                    Image(systemName: api.busy ? "stop.fill" : "arrow.up")
+                        .font(.system(size: 16, weight: .bold))
                         .frame(width: 34, height: 34)
                         .foregroundStyle(glassBar ? AnyShapeStyle(.white) : AnyShapeStyle(.black))
                         .background(glassBar ? AnyShapeStyle(.clear) : AnyShapeStyle(.white))
                         .clipShape(.circle)
-                }.disabled(draft.trimmingCharacters(in: .whitespaces).isEmpty && attachments.isEmpty)
+                }
+                .disabled(!api.busy && draft.trimmingCharacters(in: .whitespaces).isEmpty && attachments.isEmpty)
             }
             .padding(8)
             .glassBar(glassBar, radius: 26, fallback: Color(white: 0.11))
@@ -286,8 +293,13 @@ struct ChatView: View {
         }
     }
 
-    private func addPhotos(_ items: [PhotosPickerItem]) async {
-        for item in items {
+    private func stop() {
+        // No local busy=false: the Mac ends the turn and the stream reports it,
+        // so the button cannot flip back to "send" while the answer still runs.
+        Task { await api.stopTurn() }
+    }
+
+    private func addPhotos(_ items: [PhotosPickerItem]) async {        for item in items {
             if let data = try? await item.loadTransferable(type: Data.self),
                let path = await api.upload(data) {
                 attachments.append((path, "photo"))
