@@ -118,6 +118,23 @@ jobs:
           brew install xcodegen || true
           xcodegen generate
 
+      # Before spending the signed archive on Apple's certificate quota: does
+      # the code even COMPILE against the iOS 26 SDK? Signing is off here, so
+      # this step cannot fail for a certificate reason, which is what tells the
+      # two apart - "Choose a certificate to revoke" used to hide the compile
+      # result entirely, so a real error in Sources/ was indistinguishable from
+      # an account problem.
+      - name: Compile against the iOS 26 SDK (no signing, no quota)
+        run: |
+          xcodebuild -project Bishop.xcodeproj -scheme "$SCHEME" \
+            -configuration Debug \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath /tmp/compile-check \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO \
+            PRODUCT_BUNDLE_IDENTIFIER="$BUNDLE_ID" \
+            build | tail -40
+          echo "compiles clean against $(xcrun --sdk iphoneos --show-sdk-version)"
+
       - name: Build and sign
         env:
           TOKEN: ${{ secrets.BISHOP_TOKEN }}
