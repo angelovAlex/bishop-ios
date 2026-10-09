@@ -368,7 +368,7 @@ struct PictureView: View {
 /// Shown when the Mac does not answer: the address and the token, nothing else.
 struct ConnectBanner: View {
     @ObservedObject var api: BishopAPI
-    @State private var host = ""
+    @State private var host = BishopAPI.DEFAULT_HOST   // the address, so only the token is typed
     @State private var token = ""
 
     var body: some View {

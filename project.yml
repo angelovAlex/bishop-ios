@@ -24,8 +24,8 @@ targets:
           - UIInterfaceOrientationPortrait
           - UIInterfaceOrientationLandscapeLeft
           - UIInterfaceOrientationLandscapeRight
-        # The Mac speaks plain HTTP on the LAN, and its name is bishop.local.
+        # The Mac speaks plain HTTP on the LAN, at the address in BishopAPI.
+        # The Bonjour name Alexs-MacBook-Pro.local is only a fallback candidate,
+        # so no local-network permission (NSBonjourServices) is needed.
         NSAppTransportSecurity:
           NSAllowsArbitraryLoads: true
-        NSLocalNetworkUsageDescription: Bishop talks to your Mac on the local network.
-        NSBonjourServices: ["_http._tcp"]

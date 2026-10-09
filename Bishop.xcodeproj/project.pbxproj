@@ -12,12 +12,10 @@
 		909E72EB665780FF8F806786 /* BishopAPI.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6730706CF0F861E13C2C29F3 /* BishopAPI.swift */; };
 		979FF8F16C509DD1D0C4B66A /* ChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 145647177182283C147488DA /* ChatView.swift */; };
 		D187543EEEBF13D29BD15966 /* StreamClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7FEC494FF232A248E7256004 /* StreamClient.swift */; };
-		F811A4A9D9B3AD3A7479F578 /* Bonjour.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1E73B2C90AD444A52330C4AE /* Bonjour.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
 		145647177182283C147488DA /* ChatView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatView.swift; sourceTree = "<group>"; };
-		1E73B2C90AD444A52330C4AE /* Bonjour.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Bonjour.swift; sourceTree = "<group>"; };
 		3C6CECA2E9A75FB855534DDD /* Bishop.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Bishop.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		6730706CF0F861E13C2C29F3 /* BishopAPI.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BishopAPI.swift; sourceTree = "<group>"; };
 		77A16C71A885F0D29324B257 /* BishopApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BishopApp.swift; sourceTree = "<group>"; };
@@ -49,7 +47,6 @@
 				9F7671721F5BB6BF4B8827A4 /* Assets.xcassets */,
 				6730706CF0F861E13C2C29F3 /* BishopAPI.swift */,
 				77A16C71A885F0D29324B257 /* BishopApp.swift */,
-				1E73B2C90AD444A52330C4AE /* Bonjour.swift */,
 				145647177182283C147488DA /* ChatView.swift */,
 				F47C878F47EA2A7B724EBDC6 /* Info.plist */,
 				7FEC494FF232A248E7256004 /* StreamClient.swift */,
@@ -126,7 +123,6 @@
 			files = (
 				909E72EB665780FF8F806786 /* BishopAPI.swift in Sources */,
 				54D147263B93613307370F1C /* BishopApp.swift in Sources */,
-				F811A4A9D9B3AD3A7479F578 /* Bonjour.swift in Sources */,
 				979FF8F16C509DD1D0C4B66A /* ChatView.swift in Sources */,
 				D187543EEEBF13D29BD15966 /* StreamClient.swift in Sources */,
 			);

@@ -64,22 +64,23 @@ final class BishopAPI: ObservableObject {
 
     private let stream = StreamClient()
     private let session_ = URLSession(configuration: .default)
-    let bonjour = Bonjour()          // finds the Mac without knowing its IP
 
 
     // MARK: address book
 
-    /// Where the Mac might be, most trustworthy first: the address that worked
-    /// last time, then whatever Bonjour found just now (that is what survives a
-    /// new DHCP lease), then the mDNS name of the Mac and the last-resort ones.
+    /// The Mac's address. Edit this one line to move the app somewhere else;
+    /// the rest of `candidates` is fallback. The port lives in the address
+    /// because webui.py writes the one it actually chose to ~/.bishop_web_port.
+    static let DEFAULT_HOST = "192.168.2.12:8420"
+
+    /// Where the Mac might be, in the order worth trying: what Alex last typed
+    /// (or the last address that answered), then DEFAULT_HOST, then the Mac's
+    /// Bonjour name - which follows a new DHCP lease without any discovery code -
+    /// and finally localhost, which is where the simulator sees the Mac.
     var candidates: [String] {
-        var out: [String] = []
         let saved = UserDefaults.standard.string(forKey: "host") ?? ""
-        if !saved.isEmpty { out.append(saved) }
-        out.append(contentsOf: bonjour.found)
-        for h in ["Alexs-MacBook-Pro.local:8420", "MacBook-Pro.local:8420", "127.0.0.1:8420"]
-        where !out.contains(h) { out.append(h) }
-        return out
+        return [saved, Self.DEFAULT_HOST,
+                "Alexs-MacBook-Pro.local:8420", "127.0.0.1:8420"].filter { !$0.isEmpty }
     }
 
     /// The address and token last used. Read once, here: connect() must never
@@ -100,7 +101,6 @@ final class BishopAPI: ObservableObject {
     /// Try every candidate address once; keep the first that answers /api/state.
     func connect() async {
         save()
-        if !connected { bonjour.start(); try? await Task.sleep(nanoseconds: 1_200_000_000) }
         guard !token.isEmpty else { lastError = "No token: type the one in ~/.bishop_web_token."; return }
         for h in candidates {
             do {
