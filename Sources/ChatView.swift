@@ -172,6 +172,12 @@ struct ChatView: View {
                     ForEach(events) { e in
                         EventRow(event: e, api: api, fullPicture: $fullPicture)
                             .id(e.id)
+                            // The live thought is the one row that can also get
+                            // SHORTER (its paragraph is replaced), so it is
+                            // measured: see FollowGrowth.
+                            .modifier(FollowGrowth(
+                                active: e.kind == .thought && e.open && e.id == events.last?.id,
+                                grown: { follow(proxy) }))
                     }
                     Color.clear.frame(height: 1).id("bottom")
                 }
@@ -180,7 +186,15 @@ struct ChatView: View {
             }
             .scrollDismissesKeyboard(.interactively)
             .onChange(of: events.count) { follow(proxy) }
-            .onChange(of: events.last?.text) { follow(proxy) }
+            .onChange(of: events.last?.text) { _, _ in
+                // A live thought is measured instead - FollowGrowth - because it
+                // is also the one row that can SHRINK: following a replaced
+                // paragraph on every token is what dragged the transcript down.
+                // Past its cap the block scrolls inside itself, so the newest
+                // line stays in sight even while the transcript sits still.
+                if let e = events.last, e.kind == .thought, e.open { return }
+                follow(proxy)
+            }
         }
     }
 
@@ -544,7 +558,10 @@ struct ThoughtBlock: View {
     let running: Bool           // the turn is being written right now
     @State private var expanded = false
 
-    private var folded: Bool { !running }
+    /// Past this the block stops growing and scrolls inside itself, so a long
+    /// paragraph cannot take the screen away from the transcript.
+    private static let maxBody: CGFloat = 180
+
     private var label: String {
         if running { return "thinking..." }
         return secs > 0 ? "thought for \(secs)s" : "thought"
@@ -560,7 +577,9 @@ struct ThoughtBlock: View {
                     Text(label).font(.caption)
                 }.foregroundStyle(.gray)
             }
-            if show { body_ }
+            if show {
+                if expanded { whole } else { liveParagraph }
+            }
         }
     }
 
@@ -568,7 +587,7 @@ struct ThoughtBlock: View {
     /// the line Bishop is on now, the way Apollo streams a reasoning summary. The
     /// paragraph is REPLACED as soon as a blank line follows it, so the block
     /// stays one paragraph tall instead of growing a wall of text. Open it (a tap)
-    /// and the whole thought is there.
+    /// and the whole thought is there, capped and scrollable.
     ///
     /// A FOLDED thought shows no body at all, just its one-line label: it is
     /// over, its reasoning is noise by then, and a finished thought that kept its
@@ -578,12 +597,38 @@ struct ThoughtBlock: View {
     /// Empty text while running is legitimate and shows NOTHING: a thought that
     /// has sent only "#" or a blank line so far has no paragraph yet, and an
     /// empty line under the label would just push the transcript around.
-    private var body_: some View {
-        Text(expanded ? text : lastParagraph)
-            .font(.system(size: 12, design: .monospaced))
-            .foregroundStyle(Color(white: 0.55))
-            .padding(.leading, 8)
-            .overlay(alignment: .leading) { Rectangle().frame(width: 2).foregroundStyle(Color(white: 0.25)) }
+    private var whole: some View { clipped { Text(text) } }
+
+    /// The paragraph being written, held at its own bottom as it grows: past
+    /// maxBody the block keeps its height and the newest line is the one in
+    /// sight, which is the whole point of showing only the live paragraph. Each
+    /// paragraph starts at the top instead of at the offset of the one it
+    /// replaced.
+    private var liveParagraph: some View {
+        ScrollViewReader { proxy in
+            clipped { Text(lastParagraph) }
+                .onChange(of: lastParagraph) { _, _ in
+                    proxy.scrollTo("tail", anchor: .bottom)
+                }
+        }
+    }
+
+    private func clipped<C: View>(@ViewBuilder _ content: () -> C) -> some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+                content()
+                    .font(.system(size: 12, design: .monospaced))
+                    .foregroundStyle(Color(white: 0.55))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                Color.clear.frame(height: 1).id("tail")
+            }
+        }
+        .frame(maxHeight: Self.maxBody)
+        // Shorter than the cap means there is nothing to scroll: no bounce, no
+        // rubber band, the block simply sits there at its natural height.
+        .scrollBounceBehavior(.basedOnSize)
+        .padding(.leading, 8)
+        .overlay(alignment: .leading) { Rectangle().frame(width: 2).foregroundStyle(Color(white: 0.25)) }
     }
 
     private var show: Bool { expanded || (running && !lastParagraph.isEmpty) }
@@ -604,6 +649,37 @@ struct ThoughtBlock: View {
         var start = end
         while start > 0 && !blank(start - 1) { start -= 1 }  // back to the blank line before it
         return lines[start..<end].joined(separator: "\n")
+    }
+}
+
+
+/// Scroll the transcript down only while the measured row GROWS.
+///
+/// The live thought is the one row that also gets SHORTER: the model ends a
+/// paragraph, the block replaces it with the next one, and following that - as
+/// an unconditional scrollTo on every token did - dragged the whole transcript
+/// down again and again. Turning taller is the one case that means new text has
+/// arrived, so it is the only one that scrolls.
+private struct FollowGrowth: ViewModifier {
+    let active: Bool
+    let grown: () -> Void
+    @State private var height: CGFloat = 0
+
+    func body(content: Content) -> some View {
+        content.background(
+            GeometryReader { g in
+                Color.clear
+                    .onChange(of: g.size.height) { _, h in
+                        // No previous height (the thought has just started, or
+                        // this row was scrolled far enough out of the LazyVStack
+                        // to be released and rebuilt): there is nothing to be
+                        // shorter than, and the stream's own scroll already
+                        // covers the arrival.
+                        if active && height > 0 && h > height { grown() }
+                        height = h
+                    }
+            }
+        )
     }
 }
 
