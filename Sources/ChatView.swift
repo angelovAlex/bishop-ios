@@ -14,37 +14,36 @@ struct ChatView: View {
     @State private var picker: [PhotosPickerItem] = []
     @State private var showStats = false
     @State private var fullPicture: String?
-    @State private var atBottom = true
     @State private var picking = false        // the session sheet
 
     var body: some View {
-        VStack(spacing: 0) {
-            header
-            if api.busy { liveBanner }
-            transcript
-            statsStrip
-            composer
-        }
-        .background(Color.black)
-        .preferredColorScheme(.dark)
-        .task {
-            // Keep trying until the Mac answers. iOS asks "find devices on your
-            // local network" the first time the app touches 192.168.x.x, and the
-            // FIRST request is refused while that prompt is on screen - a single
-            // attempt would leave the app sitting on "Not connected" until it was
-            // relaunched by hand.
-            await reload()
-            while !api.connected && !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: 4_000_000_000)
-                if Task.isCancelled { break }
+        // The bars hang off the SCROLL VIEW itself, via safeAreaBar - see
+        // BarsOverTranscript. Inside a VStack the transcript stopped at their
+        // edge, so nothing ever scrolled under the glass and the glass itself was
+        // impossible to see; only a direct child can be pinned like this and get
+        // the scroll edge effect (the frosted band under a bar).
+        transcript
+            .modifier(BarsOverTranscript(glass: glassBar, header: header, bottom: bottomBars))
+            .background(Color.black)
+            .preferredColorScheme(.dark)
+            .task {
+                // Keep trying until the Mac answers. iOS asks "find devices on your
+                // local network" the first time the app touches 192.168.x.x, and the
+                // FIRST request is refused while that prompt is on screen - a single
+                // attempt would leave the app sitting on "Not connected" until it was
+                // relaunched by hand.
                 await reload()
+                while !api.connected && !Task.isCancelled {
+                    try? await Task.sleep(nanoseconds: 4_000_000_000)
+                    if Task.isCancelled { break }
+                    await reload()
+                }
             }
-        }
-        .onAppear { startStream() }
-        .sheet(item: Binding(get: { fullPicture.map(PicturePath.init) }, set: { fullPicture = $0?.path })) {
-            PictureView(path: $0.path, api: api)
-        }
-        .sheet(isPresented: $picking) { sessionPicker }
+            .onAppear { startStream() }
+            .sheet(item: Binding(get: { fullPicture.map(PicturePath.init) }, set: { fullPicture = $0?.path })) {
+                PictureView(path: $0.path, api: api)
+            }
+            .sheet(isPresented: $picking) { sessionPicker }
     }
 
     // MARK: header
@@ -63,25 +62,50 @@ struct ChatView: View {
     }
 
     private var header: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 12) {
             // Same action as the title: it opens the session list, and a chevron
-            // is what iOS 26 puts in that corner.
-            Button { picking = true } label: { Image(systemName: "chevron.left") }
-                .buttonBorderShape(.circle).barButton(glassBar)
+            // is what iOS 26 puts in that corner. No .glass button style here -
+            // a bar already IS glass, and a glass button on glass reads as one
+            // more bubble; the reference draws plain symbols on the bar.
+            Button { picking = true } label: {
+                Image(systemName: "chevron.left").font(.system(size: 22, weight: .semibold))
+                    .frame(width: 34, height: 34)
+            }
+            .buttonBorderShape(.circle).barButton(false)
 
             // NOT a Menu: SwiftUI builds a Menu's label ONCE, so a picker showing
             // the session title kept showing the fallback from before the first
-            // /api/state landed, however the data changed underneath it.
+            // /api/state landed, however the data changed underneath it. The
+            // chevron shows that it opens the list; the title is WHITE and at
+            // title size, where .footnote grey was half the system's weight.
             Button { picking = true } label: {
-                Text(title).lineLimit(1).font(.footnote).frame(maxWidth: .infinity)
+                HStack(spacing: 6) {
+                    Text(title).font(.headline).foregroundStyle(.white).lineLimit(1)
+                    Image(systemName: "chevron.right").font(.footnote.weight(.semibold))
+                }
+                .padding(.horizontal, 14).frame(maxWidth: .infinity, minHeight: 34)
             }
             .buttonBorderShape(.capsule).barButton(glassBar)
 
-            Button { Task { await newChat() } } label: { Image(systemName: "square.and.pencil") }
-                .buttonBorderShape(.circle).barButton(glassBar)
+            Button { Task { await newChat() } } label: {
+                Image(systemName: "square.and.pencil").font(.system(size: 20, weight: .semibold))
+                    .frame(width: 34, height: 34)
+            }
+            .buttonBorderShape(.circle).barButton(glassBar)
         }
-        .padding(.horizontal, 10).padding(.vertical, 6)
+        .padding(.horizontal, 10).padding(.vertical, 2)
         .tint(glassBar ? .white : .gray)
+    }
+
+    /// Stats strip and composer, in one bar under the transcript. They used to be
+    /// two more rows of the VStack; behind the glass they belong to the bottom
+    /// edge effect instead.
+    private var bottomBars: some View {
+        VStack(spacing: 0) {
+            if api.busy { liveBanner }
+            statsStrip
+            composer
+        }
     }
 
     /// The session list: date + first words, the open one ticked.
@@ -529,11 +553,46 @@ struct ConnectBanner: View {
 
 // MARK: - Liquid Glass
 
-/// A button in a bar: Liquid Glass on iOS 26, the previous bordered chrome before
-/// it. The `#if` is the COMPILER's version, not the OS one, because a symbol the
-/// SDK does not have is a compile error even inside `#available`: Xcode 26.2
-/// ships Swift 6.2, so `compiler(>=6.2)` is what "the SDK has the glass APIs"
-/// actually means.
+/// The two bars on the scroll view's edges.
+///
+/// `safeAreaBar` is iOS 26 only, and it is what puts a bar ON TOP of scrolling
+/// content: it insets the scroll view's safe area and adds the scroll edge effect
+/// - the blur that makes the content visibly slide under the bar. Both gates are
+/// needed, the compiler's (the symbol does not exist before Swift 6.2 / SDK 26,
+/// and a missing symbol is an error even inside #available) and the OS one.
+///
+/// Before 26 there is no safeAreaBar, so the old layout is kept: a VStack with
+/// the bars as ordinary rows.
+private struct BarsOverTranscript<H: View, B: View>: ViewModifier {
+    let glass: Bool
+    let header: H
+    let bottom: B
+
+    func body(content: Content) -> some View {
+        #if compiler(>=6.2)
+        if glass, #available(iOS 26.0, *) {
+            content
+                .safeAreaBar(edge: .top, spacing: 0) { header }
+                .safeAreaBar(edge: .bottom, spacing: 0) { bottom }
+        } else {
+            legacy(content)
+        }
+        #else
+        legacy(content)
+        #endif
+    }
+
+    /// iOS 17-18: the bars are rows of a VStack, the transcript a plain area.
+    private func legacy(_ content: Content) -> some View {
+        VStack(spacing: 0) {
+            header
+            content
+            bottom
+        }
+    }
+}
+
+/// A button in a bar.
 extension View {
     @ViewBuilder func barButton(_ glass: Bool) -> some View {
         if glass {
@@ -550,7 +609,7 @@ extension View {
             self.buttonStyle(.bordered)
             #endif
         } else {
-            self.buttonStyle(.bordered)
+            self.buttonStyle(.borderless)
         }
     }
 
