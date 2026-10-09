@@ -49,10 +49,25 @@ struct ChatView: View {
 
     // MARK: header
 
+    /// True when the build toolchain and the running OS both know Liquid Glass.
+    /// The COMPILER gate matters as much as the runtime one: `glassEffect` does
+    /// not exist in the iOS 18 SDK, and a missing symbol is a compile error even
+    /// inside an `#available` check. Xcode 26.2 and later ship Swift 6.2, so
+    /// `compiler(>=6.2)` is exactly "the SDK has the glass APIs"; on Xcode 16 the
+    /// whole glass branch is eliminated and never type-checked.
+    private var glassBar: Bool {
+        #if compiler(>=6.2)
+        if #available(iOS 26.0, *) { return true }
+        #endif
+        return false
+    }
+
     private var header: some View {
         HStack(spacing: 10) {
-            Button { Task { await newChat() } } label: { Image(systemName: "square.and.pencil") }
-                .buttonStyle(.bordered).buttonBorderShape(.circle)
+            // Same action as the title: it opens the session list, and a chevron
+            // is what iOS 26 puts in that corner.
+            Button { picking = true } label: { Image(systemName: "chevron.left") }
+                .buttonBorderShape(.circle).barButton(glassBar)
 
             // NOT a Menu: SwiftUI builds a Menu's label ONCE, so a picker showing
             // the session title kept showing the fallback from before the first
@@ -60,16 +75,13 @@ struct ChatView: View {
             Button { picking = true } label: {
                 Text(title).lineLimit(1).font(.footnote).frame(maxWidth: .infinity)
             }
-            .buttonStyle(.bordered).buttonBorderShape(.capsule)
+            .buttonBorderShape(.capsule).barButton(glassBar)
 
-            Button { Task { await api.stopSpeech() } } label: { Image(systemName: "speaker.slash") }
-                .buttonStyle(.bordered).buttonBorderShape(.circle)
-
-            Button { Task { await api.restartServer() } } label: { Image(systemName: "arrow.clockwise") }
-                .buttonStyle(.bordered).buttonBorderShape(.circle)
+            Button { Task { await newChat() } } label: { Image(systemName: "square.and.pencil") }
+                .buttonBorderShape(.circle).barButton(glassBar)
         }
         .padding(.horizontal, 10).padding(.vertical, 6)
-        .tint(.gray)
+        .tint(glassBar ? .white : .gray)
     }
 
     /// The session list: date + first words, the open one ticked.
@@ -196,10 +208,16 @@ struct ChatView: View {
                     }.padding(.horizontal, 12)
                 }
             }
-            HStack(alignment: .bottom, spacing: 8) {
+            // The composer is one glass pill holding a + on the left and the send
+            // button on the right, with the text field sharing the same surface,
+            // instead of a grey rounded box with loose circles on top of it.
+            HStack(alignment: .bottom, spacing: 6) {
                 PhotosPicker(selection: $picker, maxSelectionCount: 4, matching: .images) {
                     Image(systemName: "plus").font(.system(size: 18, weight: .semibold))
-                        .frame(width: 34, height: 34).background(Color(white: 0.2)).clipShape(.circle)
+                        .frame(width: 34, height: 34)
+                        .foregroundStyle(glassBar ? .white : .primary)
+                        .background(glassBar ? AnyShapeStyle(.clear) : AnyShapeStyle(Color(white: 0.2)))
+                        .clipShape(.circle)
                 }
                 TextField("Message Bishop", text: $draft, axis: .vertical)
                     .lineLimit(1...6)
@@ -210,12 +228,14 @@ struct ChatView: View {
                     .onSubmit { send() }        // a hardware keyboard's return sends
                 Button { send() } label: {
                     Image(systemName: "arrow.up").font(.system(size: 16, weight: .bold))
-                        .frame(width: 34, height: 34).background(.white).foregroundStyle(.black).clipShape(.circle)
+                        .frame(width: 34, height: 34)
+                        .foregroundStyle(glassBar ? AnyShapeStyle(.white) : AnyShapeStyle(.black))
+                        .background(glassBar ? AnyShapeStyle(.clear) : AnyShapeStyle(.white))
+                        .clipShape(.circle)
                 }.disabled(draft.trimmingCharacters(in: .whitespaces).isEmpty && attachments.isEmpty)
             }
             .padding(8)
-            .background(Color(white: 0.11))
-            .clipShape(RoundedRectangle(cornerRadius: 22))
+            .glassBar(glassBar, radius: 26, fallback: Color(white: 0.11))
             .padding(.horizontal, 10)
         }
         .padding(.bottom, 6)
@@ -504,5 +524,56 @@ struct ConnectBanner: View {
         .background(Color(white: 0.12))
         .clipShape(RoundedRectangle(cornerRadius: 16))
         .onAppear { host = api.host; token = api.token }
+    }
+}
+
+// MARK: - Liquid Glass
+
+/// A button in a bar: Liquid Glass on iOS 26, the previous bordered chrome before
+/// it. The `#if` is the COMPILER's version, not the OS one, because a symbol the
+/// SDK does not have is a compile error even inside `#available`: Xcode 26.2
+/// ships Swift 6.2, so `compiler(>=6.2)` is what "the SDK has the glass APIs"
+/// actually means.
+extension View {
+    @ViewBuilder func barButton(_ glass: Bool) -> some View {
+        if glass {
+            #if compiler(>=6.2)
+            self.buttonStyle(.glass)
+            #else
+            self.buttonStyle(.bordered)
+            #endif
+        } else {
+            self.buttonStyle(.bordered)
+        }
+    }
+
+    /// The surface of a bar or the composer, on the view's whole frame including
+    /// its padding - so pad first and call this last. A flat fill before iOS 26,
+    /// Liquid Glass on it.
+    func glassBar(_ glass: Bool, radius: CGFloat, fallback: Color) -> some View {
+        let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
+        return self
+            // Under glass the fill has to go: the material is translucent, so a
+            // dark slab behind it just greys it out.
+            .background(glass ? Color.clear : fallback)
+            .clipShape(shape)
+            .modifier(GlassOn(glass: glass, shape: shape))
+    }
+}
+
+private struct GlassOn: ViewModifier {
+    let glass: Bool
+    let shape: RoundedRectangle
+
+    func body(content: Content) -> some View {
+        #if compiler(>=6.2)
+        if glass, #available(iOS 26.0, *) {
+            content.glassEffect(.regular, in: shape)
+        } else {
+            content
+        }
+        #else
+        content
+        #endif
     }
 }
