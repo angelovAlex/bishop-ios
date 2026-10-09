@@ -106,6 +106,7 @@ struct ChatView: View {
         VStack(spacing: 0) {
             if api.busy { liveBanner }
             statsStrip
+            effortRow
             composer
         }
     }
@@ -241,6 +242,35 @@ struct ChatView: View {
         if v < 1000 { return "\(v)" }
         if v < 1_000_000 { return String(format: "%.1fk", Double(v) / 1000) }
         return String(format: "%.2fM", Double(v) / 1_000_000)
+    }
+
+    // MARK: reasoning effort (the web UI's pill, one row above the composer)
+
+    /// How hard Bishop thinks before answering - the same POST /api/effort the
+    /// page's <select> calls. The levels come from the server (/api/state), so a
+    /// new one needs no app release; the row is hidden until they arrive rather
+    /// than showing a guess. A segmented picker, not a Menu: a Menu's label is
+    /// built once (the lesson the session title already taught), while a Picker
+    /// re-reads the selection on every redraw.
+    private var effortRow: some View {
+        Group {
+            if !api.levels.isEmpty {
+                HStack(spacing: 8) {
+                    Text("effort").font(.system(size: 11, design: .monospaced))
+                    Picker("effort", selection: Binding(
+                        get: { api.effort },
+                        set: { picked in Task { await api.setEffort(picked) } })) {
+                        ForEach(api.levels, id: \.self) { level in
+                            Text(level).tag(level)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .disabled(api.busy)      // the level is read when a turn starts
+                }
+                .foregroundStyle(.gray)
+                .padding(.horizontal, 14).padding(.bottom, 6)
+            }
+        }
     }
 
     // MARK: composer
