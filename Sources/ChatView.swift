@@ -15,6 +15,8 @@ struct ChatView: View {
     @State private var showStats = false
     @State private var fullPicture: String?
     @State private var picking = false        // the session sheet
+    @State private var pinned: UUID?          // a just-sent message, held at the top of the screen
+    @FocusState private var typing: Bool      // the composer's focus, so send() can drop the keyboard
 
     var body: some View {
         // The bars hang off the SCROLL VIEW itself, via safeAreaBar - see
@@ -177,9 +179,24 @@ struct ChatView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
             .scrollDismissesKeyboard(.interactively)
-            .onChange(of: events.count) { withAnimation(.linear(duration: 0.15)) { proxy.scrollTo("bottom", anchor: .bottom) } }
-            .onChange(of: events.last?.text) { withAnimation(.linear(duration: 0.15)) { proxy.scrollTo("bottom", anchor: .bottom) } }
+            .onChange(of: events.count) { follow(proxy) }
+            .onChange(of: events.last?.text) { follow(proxy) }
         }
+    }
+
+    /// The newest text in view. Sending is the exception: that append puts the
+    /// user's own message at the TOP of the screen (see `pinned`), so everything
+    /// the answer writes lands in the space below it instead of in the one-line
+    /// strip above the keyboard. While the answer is shorter than the screen the
+    /// bottom-anchored scroll clamps to the top and the pin survives by itself;
+    /// once it outgrows the screen the transcript scrolls normally.
+    private func follow(_ proxy: ScrollViewProxy) {
+        if let id = pinned {
+            pinned = nil                   // honoured exactly once, on the send itself
+            withAnimation(.easeOut(duration: 0.25)) { proxy.scrollTo(id, anchor: .top) }
+            return
+        }
+        withAnimation(.linear(duration: 0.15)) { proxy.scrollTo("bottom", anchor: .bottom) }
     }
 
     // MARK: counters (one dim line, tap for the report)
@@ -248,10 +265,9 @@ struct ChatView: View {
                     .textFieldStyle(.plain)
                     .padding(.vertical, 8)
                     .font(.system(size: 16, design: .monospaced))   // 16pt: iOS never zoom-scales
-                // No .submitLabel/.onSubmit on purpose: a multiline TextField
-                // with neither keeps the keyboard's return key as what it says -
-                // a NEW LINE. Sending is the round button's job, so a reply can
-                // be written in several lines without it flying off mid-thought.
+                    .focused($typing)
+                    .submitLabel(.send)          // labels that key "send"...
+                    .onSubmit { send() }         // ...and this is its iOS 18+ path
                 Button { api.busy ? stop() : send() } label: {
                     // One button, two jobs: a turn in flight turns it into the
                     // stop square, and pressing it ends the turn (the stream's
@@ -271,6 +287,21 @@ struct ChatView: View {
         }
         .padding(.bottom, 6)
         .onChange(of: picker) { _, items in Task { await addPhotos(items); picker = [] } }
+        // Return key = send, as asked - and this, not onSubmit, is what does it:
+        // a multiline (`axis: .vertical`) TextField INSERTS A NEWLINE on that key
+        // instead of submitting, verified on the simulator (the draft gained a
+        // line, onSubmit never ran, `submitLabel` still labelled the key "send").
+        // So the newline is caught here and eaten. A genuine multi-line message
+        // is pasted, not typed through the return key, and pasted line breaks do
+        // not end in one - the guard is on a TRAILING break, so they survive,
+        // while onSubmit above stays as the hook for an iOS that does submit.
+        .onChange(of: draft) { _, text in
+            guard text.hasSuffix("\n") else { return }
+            var body = text
+            while body.hasSuffix("\n") { body.removeLast() }
+            draft = body
+            send()
+        }
     }
 
     // MARK: actions
@@ -281,10 +312,13 @@ struct ChatView: View {
         guard !text.isEmpty || !paths.isEmpty else { return }
         draft = ""
         attachments = []
+        typing = false          // the keyboard goes down and gives the answer the screen
         // The stream replays the turn, but the user's own line is not echoed
         // back mid-turn, so show it at once - same shape as the web page.
         let echo = paths.isEmpty ? text : text + (text.isEmpty ? "" : "\n") + "[picture]"
-        events.append(ChatEvent(kind: .user, text: echo, imagePath: paths.first ?? ""))
+        let mine = ChatEvent(kind: .user, text: echo, imagePath: paths.first ?? "")
+        events.append(mine)
+        pinned = mine.id        // ...at the TOP, so the transcript fills what is left
         for p in paths { events.append(ChatEvent(kind: .image, imagePath: p)) }
         Task {
             if let problem = await api.send(text: text, paths: paths) {
@@ -333,10 +367,18 @@ struct ChatView: View {
     /// thought, content into one answer, a tool call starting a new phase), and
     /// each batch is MERGED onto the rows already on screen - so what arrives
     /// joins the bubble it belongs to instead of opening a new one.
+    ///
+    /// The server does NOT say that a replay is a replay: it rebuilds the turn in
+    /// flight from its 'start' event and sends it to every client identically, so
+    /// a client that just connected sees a thought already in progress. `live`
+    /// (which carries nothing but counters) is the one signal reserved for a turn
+    /// actually running, and the server emits the first one 0.15 s after the
+    /// first reasoning token - so its arrival is when the thought on screen can
+    /// honestly start being timed.
     private func startStream() {
         api.startStream(onEvents: { batch in
             for row in batch { merge(row) }
-        }, onStart: {
+        }, onLive: { markWatched() }, onStart: {
             api.busy = true
             api.liveTokens = 0
         }, onEnd: {
@@ -376,15 +418,38 @@ struct ChatView: View {
         }
     }
 
+    /// The turn really is running on the Mac now (the stream's `live` counters),
+    /// so the thought it is writing may be timed from here. Everything before
+    /// this arrived as a replay of words already written, which is why showing up
+    /// in the middle of a thought leaves it unwatched - and, when it folds, with
+    /// no duration rather than a fabricated "1s".
+    private func markWatched() {
+        for i in events.indices where events[i].open && events[i].kind == .thought && !events[i].watched {
+            events[i].started = Date()
+            events[i].watched = true
+        }
+    }
+
     /// A phase boundary: a tool call, a result, or the end of the turn. The
-    /// thought that was streaming folds into one "thought for Ns" line, and on a
-    /// finished turn nothing keeps taking text - so the next turn cannot append
-    /// to a bubble from the previous one.
+    /// thought that was streaming folds into one dim line (with its duration, if
+    /// this app was watching when it started), and on a finished turn nothing
+    /// keeps taking text - so the next turn cannot append to a bubble from the
+    /// previous one.
     private func closePhase(everything: Bool = false) {
         for i in events.indices where events[i].open {
             if events[i].kind == .thought {
                 events[i].open = false
-                events[i].secs = max(1, Int(Date().timeIntervalSince(events[i].started)))
+                // A duration needs a clock that started while the thought was
+                // still being written (markWatched) and at least two seconds of
+                // it; anything else - a thought that arrived folded with a
+                // reopened session, or one this app caught mid-flight - says
+                // "thought" instead of inventing a number. Timing it from the
+                // moment its rows were decoded is what made every line read
+                // "thought for 1s".
+                if events[i].watched {
+                    let secs = Int(Date().timeIntervalSince(events[i].started))
+                    if secs >= 2 { events[i].secs = secs }
+                }
             } else if everything {
                 events[i].open = false
             }
@@ -420,7 +485,7 @@ struct EventRow: View {
                 .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
         case .thought:
-            ThoughtBlock(text: event.text, secs: event.secs)
+            ThoughtBlock(text: event.text, secs: event.secs, running: event.open)
         case .tool:
             // "> name {args}", one line, as the page shows it; the full call is
             // one tap away, pretty-printed.
@@ -466,13 +531,24 @@ struct EventRow: View {
     }
 }
 
-/// Bishop's thoughts: dim, open while they stream, folded to "thought for Ns"
-/// the moment the answer or a tool call begins - the web UI's details/summary,
-/// one tap to read again.
+/// Bishop's thoughts: dim, and folded the moment the answer or a tool call begins
+/// - the web UI's details/summary, one tap to read again.
+///
+/// The label is the state, in three words: "thinking..." while the thought runs,
+/// "thought" when it is over but no duration was measured (a session read back
+/// from disk carries no timings, and the app may have caught a turn already in
+/// flight), "thought for Ns" when this app clocked it.
 struct ThoughtBlock: View {
     let text: String
     let secs: Int               // 0 while the thought is still running
+    let running: Bool           // the turn is being written right now
     @State private var expanded = false
+
+    private var folded: Bool { !running }
+    private var label: String {
+        if running { return "thinking..." }
+        return secs > 0 ? "thought for \(secs)s" : "thought"
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -481,20 +557,56 @@ struct ThoughtBlock: View {
             } label: {
                 HStack(spacing: 6) {
                     Text("▸").font(.caption2)      // the page's closed-fold marker
-                    Text(secs > 0 ? "thought for \(secs)s" : "thinking...").font(.caption)
+                    Text(label).font(.caption)
                 }.foregroundStyle(.gray)
             }
-            if show {
-                Text(text).font(.system(size: 12, design: .monospaced))
-                    .foregroundStyle(Color(white: 0.55))
-                    .padding(.leading, 8)
-                    .overlay(alignment: .leading) { Rectangle().frame(width: 2).foregroundStyle(Color(white: 0.25)) }
-            }
+            if show { body_ }
         }
     }
 
-    private var show: Bool { secs == 0 || expanded }
+    /// While a thought is being written, only its LAST PARAGRAPH is on screen -
+    /// the line Bishop is on now, the way Apollo streams a reasoning summary. The
+    /// paragraph is REPLACED as soon as a blank line follows it, so the block
+    /// stays one paragraph tall instead of growing a wall of text. Open it (a tap)
+    /// and the whole thought is there.
+    ///
+    /// A FOLDED thought shows no body at all, just its one-line label: it is
+    /// over, its reasoning is noise by then, and a finished thought that kept its
+    /// text would leave a screen of grey behind every tool call - which is what
+    /// the web page's collapsed details element avoids.
+    ///
+    /// Empty text while running is legitimate and shows NOTHING: a thought that
+    /// has sent only "#" or a blank line so far has no paragraph yet, and an
+    /// empty line under the label would just push the transcript around.
+    private var body_: some View {
+        Text(expanded ? text : lastParagraph)
+            .font(.system(size: 12, design: .monospaced))
+            .foregroundStyle(Color(white: 0.55))
+            .padding(.leading, 8)
+            .overlay(alignment: .leading) { Rectangle().frame(width: 2).foregroundStyle(Color(white: 0.25)) }
+    }
+
+    private var show: Bool { expanded || (running && !lastParagraph.isEmpty) }
+
+    /// Everything after the last blank line, which is what the model has just
+    /// written. Two traps, both from the fact that this runs on half a streamed
+    /// thought: the trailing newlines already received for the paragraph that has
+    /// not started yet must be dropped (or the block would render EMPTY the
+    /// moment the model ends a line - the text ends in "\n"), and a paragraph
+    /// that is blank on the inside is not a paragraph. Splitting on `.newlines`
+    /// rather than on the two-character string "\n\n" also makes CRLF one
+    /// separator instead of two, which needs no special case at all.
+    private var lastParagraph: String {
+        let lines = text.components(separatedBy: .newlines)
+        func blank(_ i: Int) -> Bool { lines[i].trimmingCharacters(in: .whitespaces).isEmpty }
+        var end = lines.count
+        while end > 0 && blank(end - 1) { end -= 1 }        // the not-yet-started tail
+        var start = end
+        while start > 0 && !blank(start - 1) { start -= 1 }  // back to the blank line before it
+        return lines[start..<end].joined(separator: "\n")
+    }
 }
+
 
 /// A tool call or its result: one dim line, the full text folded away.
 struct Collapsible: View {

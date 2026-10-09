@@ -33,7 +33,8 @@ struct ChatEvent: Identifiable {
     var name = ""               // tool name, detail summary, image caption
     var imagePath = ""
     var open = false            // a thought or a fold the user can open
-    var secs = 0                // how long the thought ran, once it is folded
+    var watched = false         // a thought this app saw streaming, so its clock is its own
+    var secs = 0                // how long it ran, once folded, and only when measured
     var started = Date()
 }
 
@@ -244,9 +245,15 @@ final class BishopAPI: ObservableObject {
         var out: [ChatEvent] = []
         var thought: Int?      // index of the thought taking text right now, nil once closed
         var answer: Int?       // same, for the answer bubble
+        // `secs` is NOT set here: this pass groups a live BATCH as well as a
+        // replay, and folding one on arrival stamped every thought with the
+        // second it had been in the array - which is why a running thought read
+        // "thought for 1s" from its first token (and still, after grouping, kept
+        // that number while it ran). A stored session has no timings to give, so
+        // it keeps 0 and the block says "thought"; a live one is timed by
+        // ChatView.closePhase, which knows when the thought started.
         func closeThought() {
-            if let i = thought { out[i].open = false
-                out[i].secs = max(1, Int(Date().timeIntervalSince(out[i].started))) }
+            if let i = thought { out[i].open = false }
             thought = nil
         }
         func closeAnswer() { answer = nil }
@@ -364,6 +371,7 @@ final class BishopAPI: ObservableObject {
     /// `group` as a replay - so a live turn and a reopened session cannot render
     /// differently, which is what the first version got wrong.
     func startStream(onEvents: @escaping ([ChatEvent]) -> Void,
+                     onLive: @escaping () -> Void,
                      onStart: @escaping () -> Void,
                      onEnd: @escaping () -> Void) {
         var batch: [[String: Any]] = []      // reasoning/content tokens, flushed per frame
@@ -379,8 +387,15 @@ final class BishopAPI: ObservableObject {
             case "end", "done": flush(); onEnd()
             case "usage":  if let u = obj["stats"] as? [String: Any] { self.applyStats(u) }
             case "live":
+                // Only a genuinely running turn produces these (the server sends
+                // the first one a fraction of a second into the first reasoning
+                // token), so this is the signal that the rows on screen are being
+                // WRITTEN rather than replayed - the one thing the events
+                // themselves do not say. See ChatView.markWatched.
+                let first = self.liveTokens == 0 && (obj["tokens"] as? Int ?? 0) > 0
                 self.liveTokens = obj["tokens"] as? Int ?? 0
                 self.liveRate = obj["rate"] as? Double ?? 0
+                if first { onLive() }
             case "busy", "switched": break
             default:
                 batch.append(obj)
