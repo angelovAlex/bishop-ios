@@ -14,8 +14,8 @@ struct ChatView: View {
     @State private var picker: [PhotosPickerItem] = []
     @State private var showStats = false
     @State private var fullPicture: String?
-    @State private var thinking = false         // Bishop's thoughts: collapsed until asked
     @State private var atBottom = true
+    @State private var picking = false        // the session sheet
 
     var body: some View {
         VStack(spacing: 0) {
@@ -32,23 +32,20 @@ struct ChatView: View {
         .sheet(item: Binding(get: { fullPicture.map(PicturePath.init) }, set: { fullPicture = $0?.path })) {
             PictureView(path: $0.path, api: api)
         }
+        .sheet(isPresented: $picking) { sessionPicker }
     }
 
     // MARK: header
 
     private var header: some View {
         HStack(spacing: 10) {
-            Button {
-                Task { await api.newChat(); events = []; api.session = ""
-                       events = [ChatEvent(kind: .info, text: "New conversation.")] }
-            } label: { Image(systemName: "square.and.pencil") }
+            Button { Task { await newChat() } } label: { Image(systemName: "square.and.pencil") }
                 .buttonStyle(.bordered).buttonBorderShape(.circle)
 
-            Menu {
-                ForEach(api.sessions) { s in
-                    Button(s.title) { Task { await open(s.id) } }
-                }
-            } label: {
+            // NOT a Menu: SwiftUI builds a Menu's label ONCE, so a picker showing
+            // the session title kept showing the fallback from before the first
+            // /api/state landed, however the data changed underneath it.
+            Button { picking = true } label: {
                 Text(title).lineLimit(1).font(.footnote).frame(maxWidth: .infinity)
             }
             .buttonStyle(.bordered).buttonBorderShape(.capsule)
@@ -61,6 +58,29 @@ struct ChatView: View {
         }
         .padding(.horizontal, 10).padding(.vertical, 6)
         .tint(.gray)
+    }
+
+    /// The session list: date + first words, the open one ticked.
+    private var sessionPicker: some View {
+        NavigationStack {
+            List(api.sessions) { s in
+                Button {
+                    picking = false
+                    Task { await open(s.id) }
+                } label: {
+                    HStack {
+                        Text(s.title).font(.system(size: 13, design: .monospaced))
+                            .foregroundStyle(.white)
+                        Spacer()
+                        if s.id == api.session { Image(systemName: "checkmark").foregroundStyle(.green) }
+                    }
+                }
+            }
+            .navigationTitle("Sessions")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close") { picking = false } } }
+        }
+        .presentationDetents([.medium, .large])
     }
 
     /// A turn is in flight somewhere (here, the terminal, or another phone):
@@ -100,7 +120,7 @@ struct ChatView: View {
                         ConnectBanner(api: api)
                     }
                     ForEach(events) { e in
-                        EventRow(event: e, api: api, thinking: $thinking, fullPicture: $fullPicture)
+                        EventRow(event: e, api: api, fullPicture: $fullPicture)
                             .id(e.id)
                     }
                     Color.clear.frame(height: 1).id("bottom")
@@ -198,9 +218,10 @@ struct ChatView: View {
         guard !text.isEmpty || !paths.isEmpty else { return }
         draft = ""
         attachments = []
-        // The event stream replays the turn, but the user's own line is not
-        // echoed back mid-turn, so show it at once.
-        events.append(ChatEvent(kind: .user, text: text))
+        // The stream replays the turn, but the user's own line is not echoed
+        // back mid-turn, so show it at once - same shape as the web page.
+        let echo = paths.isEmpty ? text : text + (text.isEmpty ? "" : "\n") + "[picture]"
+        events.append(ChatEvent(kind: .user, text: echo, imagePath: paths.first ?? ""))
         for p in paths { events.append(ChatEvent(kind: .image, imagePath: p)) }
         Task {
             if let problem = await api.send(text: text, paths: paths) {
@@ -218,12 +239,19 @@ struct ChatView: View {
         }
     }
 
+    private func newChat() async {
+        await api.newChat()
+        events = []
+        events = [ChatEvent(kind: .info, text: "New conversation.")]
+    }
+
     private func open(_ id: String) async {
         await api.load(session: id)
         await reload()
     }
 
     private func reload() async {
+        if !api.connected { await api.connect() }
         if let (list, sess) = try? await api.events(session: nil) {
             events = list
             api.session = sess
@@ -232,24 +260,66 @@ struct ChatView: View {
     }
 
     /// The stream replays the turn in flight, so a reconnecting phone rebuilds
-    /// only the live part: content and reasoning keep appending to the last row
-    /// of their kind, exactly like the browser does.
+    /// only the live part. The Mac does the grouping (reasoning tokens into one
+    /// thought, content into one answer, a tool call starting a new phase), and
+    /// each batch is MERGED onto the rows already on screen - so what arrives
+    /// joins the bubble it belongs to instead of opening a new one.
     private func startStream() {
-        api.startStream(onEvent: { e in
-            switch e.kind {
-            case .reasoning where events.last?.kind == .reasoning:
-                events[events.count - 1].text += e.text
-            case .content where events.last?.kind == .content:
-                events[events.count - 1].text += e.text
-            default:
-                events.append(e)
-            }
+        api.startStream(onEvents: { batch in
+            for row in batch { merge(row) }
         }, onStart: {
             api.busy = true
             api.liveTokens = 0
         }, onEnd: {
             api.busy = false
+            closePhase(everything: true)   // a turn can end mid-thought, mid-answer
         })
+    }
+
+    /// One batch of streamed rows onto the transcript. A thought or an answer
+    /// continues the last row of its kind if that is what it is; a tool call
+    /// closes the open thought first, exactly like grow()/endThought() do in the
+    /// browser. Tool arguments are re-sent with every delta, so the last one wins
+    /// rather than being appended - otherwise every token doubles the line.
+    private func merge(_ row: ChatEvent) {
+        switch row.kind {
+        case .answer where row.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty:
+            return                                   // invisible, as the page hides it
+        case .thought, .answer:
+            if let last = events.last, last.kind == row.kind, last.open {
+                events[events.count - 1].text += row.text
+                return
+            }
+            closePhase()                             // a new thought folds the old one
+            var fresh = row
+            fresh.open = true
+            events.append(fresh)
+        case .tool:
+            closePhase()
+            if let last = events.last, last.kind == .tool, last.name == row.name {
+                events[events.count - 1].text = row.text
+                return
+            }
+            events.append(row)
+        default:
+            closePhase()
+            events.append(row)
+        }
+    }
+
+    /// A phase boundary: a tool call, a result, or the end of the turn. The
+    /// thought that was streaming folds into one "thought for Ns" line, and on a
+    /// finished turn nothing keeps taking text - so the next turn cannot append
+    /// to a bubble from the previous one.
+    private func closePhase(everything: Bool = false) {
+        for i in events.indices where events[i].open {
+            if events[i].kind == .thought {
+                events[i].open = false
+                events[i].secs = max(1, Int(Date().timeIntervalSince(events[i].started)))
+            } else if everything {
+                events[i].open = false
+            }
+        }
     }
 }
 
@@ -258,37 +328,53 @@ struct ChatView: View {
 struct EventRow: View {
     let event: ChatEvent
     let api: BishopAPI
-    @Binding var thinking: Bool
     @Binding var fullPicture: String?
 
     var body: some View {
         switch event.kind {
         case .user:
-            Text(event.text).font(.system(size: 15, design: .monospaced))
-                .padding(.horizontal, 14).padding(.vertical, 9)
-                .background(Color(white: 0.17)).clipShape(RoundedRectangle(cornerRadius: 20))
-                .frame(maxWidth: .infinity, alignment: .trailing)
-        case .content:
+            VStack(alignment: .trailing, spacing: 6) {
+                if !event.text.isEmpty {
+                    Text(event.text).font(.system(size: 15, design: .monospaced))
+                        .padding(.horizontal, 14).padding(.vertical, 9)
+                        .background(Color(white: 0.17)).clipShape(RoundedRectangle(cornerRadius: 20))
+                }
+                if !event.imagePath.isEmpty {
+                    AsyncImage(url: api.imageURL(event.imagePath)) { $0.resizable().scaledToFill() }
+                        placeholder: { Color.gray }
+                        .frame(height: 90).frame(maxWidth: 160).clipShape(RoundedRectangle(cornerRadius: 12))
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .trailing)
+        case .answer:
             Text(event.text).font(.system(size: 15, design: .monospaced))
                 .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
-        case .reasoning:
-            ThoughtBlock(text: event.text, open: $thinking)
+        case .thought:
+            ThoughtBlock(text: event.text, secs: event.secs)
         case .tool:
+            // "> name {args}", one line, as the page shows it; the full call is
+            // one tap away, pretty-printed.
             Collapsible(summary: "› \(event.name) \(event.text)".prefix(120).description,
-                        text: event.text, mono: true, tint: .yellow)
-        case .toolResult:
-            Collapsible(summary: "result", text: event.text, mono: true, tint: .gray)
+                        text: Self.prettyJSON(event.text) ?? event.text,
+                        mono: true, tint: .yellow)
+        case .detail:
+            Collapsible(summary: event.name, text: event.text, mono: true, tint: .gray)
         case .image:
             // Bound BOTH sides: a phone screenshot is 20:1 tall, so capping only
             // the height leaves a column of black stretching the whole row.
-            AsyncImage(url: api.imageURL(event.imagePath)) { img in
-                img.resizable().aspectRatio(contentMode: .fit)
-                    .frame(maxWidth: 320, maxHeight: 300, alignment: .leading)
-                    .clipShape(RoundedRectangle(cornerRadius: 14))
-                    .onTapGesture { fullPicture = event.imagePath }
-            } placeholder: { ProgressView().tint(.gray).frame(width: 120, height: 120) }
-                .frame(maxWidth: .infinity, alignment: .leading)
+            VStack(alignment: .leading, spacing: 4) {
+                AsyncImage(url: api.imageURL(event.imagePath)) { img in
+                    img.resizable().aspectRatio(contentMode: .fit)
+                        .frame(maxWidth: 320, maxHeight: 300, alignment: .leading)
+                        .clipShape(RoundedRectangle(cornerRadius: 14))
+                        .onTapGesture { fullPicture = event.imagePath }
+                } placeholder: { ProgressView().tint(.gray).frame(width: 120, height: 120) }
+                if !event.name.isEmpty {
+                    Text(event.name).font(.caption2).foregroundStyle(.gray)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
         case .info:
             Text(event.text).font(.system(size: 12, design: .monospaced)).foregroundStyle(.gray)
         case .error:
@@ -298,25 +384,38 @@ struct EventRow: View {
                 .clipShape(RoundedRectangle(cornerRadius: 14))
         }
     }
+
+    /// Tool arguments are a JSON string; a folded line is readable as one object
+    /// per line, but showing raw JSON keeps it honest and copyable.
+    static func prettyJSON(_ s: String) -> String? {
+        guard let d = s.data(using: .utf8),
+              let o = try? JSONSerialization.jsonObject(with: d),
+              let p = try? JSONSerialization.data(withJSONObject: o,
+                                                  options: [.prettyPrinted, .withoutEscapingSlashes]),
+              let t = String(data: p, encoding: .utf8) else { return nil }
+        return t
+    }
 }
 
-/// Bishop's thoughts: dim, collapsed by default, one tap to read.
+/// Bishop's thoughts: dim, open while they stream, folded to "thought for Ns"
+/// the moment the answer or a tool call begins - the web UI's details/summary,
+/// one tap to read again.
 struct ThoughtBlock: View {
     let text: String
-    @Binding var open: Bool
+    let secs: Int               // 0 while the thought is still running
+    @State private var expanded = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             Button {
-                withAnimation(.easeInOut(duration: 0.15)) { open.toggle() }
+                withAnimation(.easeInOut(duration: 0.15)) { expanded.toggle() }
             } label: {
                 HStack(spacing: 6) {
-                    Image(systemName: open ? "chevron.down" : "chevron.right").font(.caption2)
-                    Text(open ? "thinking" : "thinking (\(text.count) chars)")
-                        .font(.caption)
+                    Text("▸").font(.caption2)      // the page's closed-fold marker
+                    Text(secs > 0 ? "thought for \(secs)s" : "thinking...").font(.caption)
                 }.foregroundStyle(.gray)
             }
-            if open {
+            if show {
                 Text(text).font(.system(size: 12, design: .monospaced))
                     .foregroundStyle(Color(white: 0.55))
                     .padding(.leading, 8)
@@ -324,6 +423,8 @@ struct ThoughtBlock: View {
             }
         }
     }
+
+    private var show: Bool { secs == 0 || expanded }
 }
 
 /// A tool call or its result: one dim line, the full text folded away.
@@ -336,10 +437,9 @@ struct Collapsible: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
-            Button { withAnimation { open.toggle() } } label: {
-                Text(summary).font(.system(size: 12, design: mono ? .monospaced : .default))
-                    .foregroundStyle(tint.opacity(0.8)).lineLimit(1)
-            }
+            Text(summary).font(.system(size: 12, design: mono ? .monospaced : .default))
+                .foregroundStyle(tint.opacity(0.8)).lineLimit(1)
+                .onTapGesture { withAnimation { open.toggle() } }
             if open, !text.isEmpty {
                 Text(text).font(.system(size: 11, design: .monospaced))
                     .foregroundStyle(.gray).textSelection(.enabled).padding(.leading, 10)

@@ -20,15 +20,20 @@
 
 import Foundation
 
-struct ChatEvent: Identifiable, Equatable {
-    enum Kind: Equatable { case user, reasoning, content, tool, toolResult, image, info, error }
+/// One row of the transcript. The kinds mirror what the server emits, but not
+/// one to one: a turn is a sequence of PHASES (thought, answer, tool, result),
+/// and rows are grouped that way so a thought folds as one line instead of the
+/// transcript turning into a wall of loose fragments.
+struct ChatEvent: Identifiable {
+    enum Kind { case user, thought, answer, tool, detail, image, info, error }
     let id = UUID()
     var kind: Kind
-    var text = ""
+    var text = ""               // reasoning, answer, tool arguments, result, info
+    var name = ""               // tool name, detail summary, image caption
     var imagePath = ""
-    var name = ""
-
-    static func == (a: ChatEvent, b: ChatEvent) -> Bool { a.id == b.id }
+    var open = false            // a thought or a fold the user can open
+    var secs = 0                // how long the thought ran, once it is folded
+    var started = Date()
 }
 
 struct SessionInfo: Identifiable, Hashable {
@@ -175,33 +180,94 @@ final class BishopAPI: ObservableObject {
     }
 
     /// The stored transcript of a session, as the same event shapes the live
-    /// stream uses (the server rebuilds it from the history + raw logs).
+    /// stream uses (the server rebuilds it from the history + raw logs). The
+    /// reply's own session/usage is applied as well: switching to a session the
+    /// server does not know comes back with a DIFFERENT id, and the picker has
+    /// to follow that or it shows the wrong title.
+    ///
+    /// This was also where the app looked frozen on a long session: it waited
+    /// for /api/events - which took 17 s, because resolving an image path walked
+    /// the whole home directory (see vision._resolve). The wait was the server's,
+    /// not the app's, but the app asked for state (fast) and events (slow) in one
+    /// go, so nothing drew until both came back.
     func events(session id: String?) async throws -> ([ChatEvent], String) {
         let obj: [String: Any]
         if let id {
             let r = try await post("/api/chat", ["session": id])
-            obj = ["events": r["events"] as? [[String: Any]] ?? [], "session": id]
+            applyState(r)
+            obj = r
         } else {
             obj = try await get("/api/events")
         }
         return (Self.decode(obj["events"] as? [[String: Any]] ?? []), obj["session"] as? String ?? "")
     }
 
-    static func decode(_ raw: [[String: Any]]) -> [ChatEvent] {
-        raw.compactMap { e in
-            guard let type = e["type"] as? String else { return nil }
-            switch type {
-            case "user":        return ChatEvent(kind: .user, text: e["text"] as? String ?? "")
-            case "reasoning":   return ChatEvent(kind: .reasoning, text: e["text"] as? String ?? "")
-            case "content":     return ChatEvent(kind: .content, text: e["text"] as? String ?? "")
-            case "tool":        return ChatEvent(kind: .tool, text: e["arguments"] as? String ?? "", name: e["name"] as? String ?? "tool")
-            case "tool_result": return ChatEvent(kind: .toolResult, text: e["result"] as? String ?? "")
-            case "image":       return ChatEvent(kind: .image, imagePath: e["path"] as? String ?? "")
-            case "info":        return ChatEvent(kind: .info, text: e["text"] as? String ?? "")
-            case "error":       return ChatEvent(kind: .error, text: e["text"] as? String ?? "")
-            default:            return nil
+    /// Tool calls, results, info and errors coming out of a stored session.
+    /// The whole list is grouped in one pass, exactly as the live stream is, so
+    /// replaying a session and watching it happen produce the same rows.
+    static func decode(_ raw: [[String: Any]]) -> [ChatEvent] { group(raw) }
+
+    /// The one renderer, shared by the replay and the live stream: group the
+    /// events into phases the way webui.html does. The stream sends one token
+    /// per event, so feeding them all in at once is the same as receiving them
+    /// one by one - and one code path means it cannot drift.
+    ///
+    /// Rules, all lifted from the web UI: consecutive reasoning is ONE thought
+    /// (folded as soon as the answer or a tool starts); consecutive content is
+    /// ONE answer bubble; a tool call ends the thought and closes the answer, so
+    /// the text after a call is a new bubble; a result with no text is dropped.
+    static func group(_ raw: [[String: Any]]) -> [ChatEvent] {
+        var out: [ChatEvent] = []
+        var thought: Int?      // index of the thought taking text right now, nil once closed
+        var answer: Int?       // same, for the answer bubble
+        func closeThought() {
+            if let i = thought { out[i].open = false
+                out[i].secs = max(1, Int(Date().timeIntervalSince(out[i].started))) }
+            thought = nil
+        }
+        func closeAnswer() { answer = nil }
+
+        for e in raw {
+            switch e["type"] as? String ?? "" {
+            case "user":
+                closeThought(); closeAnswer()
+                out.append(ChatEvent(kind: .user, text: e["text"] as? String ?? ""))
+            case "reasoning":
+                closeAnswer()
+                if thought == nil { out.append(ChatEvent(kind: .thought, open: true)); thought = out.count - 1 }
+                out[thought!].text += e["text"] as? String ?? ""
+            case "content":
+                closeThought()
+                let t = e["text"] as? String ?? ""
+                // A bubble that so far holds only whitespace is not shown at all
+                // (webui.html grow(): node.hidden): blank answers would otherwise
+                // leave empty gaps all over the transcript.
+                if let i = answer { out[i].text += t }
+                else if !t.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    out.append(ChatEvent(kind: .answer, text: t)); answer = out.count - 1
+                }
+            case "tool":
+                // Also shows Bishop's work from sessions with no stored events,
+                // where tools arrive as "<name> {...}" lines of the answer text.
+                closeThought(); closeAnswer()
+                out.append(ChatEvent(kind: .tool, text: e["arguments"] as? String ?? "",
+                                     name: e["name"] as? String ?? "tool"))
+            case "tool_result":
+                let body = (e["result"] as? String) ?? ""
+                closeThought(); closeAnswer()
+                out.append(ChatEvent(kind: .detail, text: body, name: "result"))
+            case "image":
+                out.append(ChatEvent(kind: .image, name: e["title"] as? String ?? "",
+                                     imagePath: e["path"] as? String ?? ""))
+            case "info":
+                out.append(ChatEvent(kind: .info, text: e["text"] as? String ?? ""))
+            case "error":
+                out.append(ChatEvent(kind: .error, text: e["text"] as? String ?? ""))
+            default: break          // start / end / live / usage / busy are not rows
             }
         }
+        closeThought()              // a turn that ended mid-thought still folds
+        return out
     }
 
     func imageURL(_ path: String) -> URL { url("/api/image?p=\(path.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? path)") }
@@ -215,8 +281,7 @@ final class BishopAPI: ObservableObject {
         do {
             _ = try await post("/api/chat", ["text": text, "paths": paths])
             liveTokens = 0
-            return nil
-        } catch {
+            return nil        } catch {
             let msg = error.localizedDescription
             return msg == "busy" ? "Bishop is still answering - the next message is not queued." : msg
         }
@@ -263,21 +328,35 @@ final class BishopAPI: ObservableObject {
     /// content, tool, tool_result, image, info, error, usage, live, done, end.
     /// The stream replays the turn in flight from its 'start', so reconnecting
     /// mid-answer misses nothing. Callbacks arrive on the main queue.
-    func startStream(onEvent: @escaping (ChatEvent) -> Void,
+    ///
+    /// Rows are grouped here too, by running the fresh events through the same
+    /// `group` as a replay - so a live turn and a reopened session cannot render
+    /// differently, which is what the first version got wrong.
+    func startStream(onEvents: @escaping ([ChatEvent]) -> Void,
                      onStart: @escaping () -> Void,
                      onEnd: @escaping () -> Void) {
+        var batch: [[String: Any]] = []      // reasoning/content tokens, flushed per frame
+        func flush() {
+            guard !batch.isEmpty else { return }
+            onEvents(Self.group(batch))
+            batch = []
+        }
         stream.onJSON = { [weak self] obj in
             guard let self, let type = obj["type"] as? String else { return }
             switch type {
-            case "start":  onStart()
-            case "end":    onEnd()
+            case "start":  flush(); onStart()
+            case "end", "done": flush(); onEnd()
             case "usage":  if let u = obj["stats"] as? [String: Any] { self.applyStats(u) }
             case "live":
                 self.liveTokens = obj["tokens"] as? Int ?? 0
                 self.liveRate = obj["rate"] as? Double ?? 0
-            case "busy", "switched", "done": break
+            case "busy", "switched": break
             default:
-                for e in Self.decode([obj]) { onEvent(e) }
+                batch.append(obj)
+                // The token does not know whether more of it is coming, so the
+                // rows go out on the next runloop pass: a whole burst of tokens
+                // then lands in ONE row instead of being regrouped per token.
+                DispatchQueue.main.async { flush() }
             }
         }
         // The server closing on us is normal (it restarts): reconnect rather
