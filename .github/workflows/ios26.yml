@@ -10,22 +10,29 @@
 # the iOS 18.2 SDK. Xcode 26 needs macOS 15.6+, so locally the app can never be
 # built against iOS 26 - and a binary built against 18.2 keeps the legacy
 # (pre-Liquid-Glass) appearance even when it runs on iOS 26. GitHub's `macos-26`
-# image carries Xcode 26.x with the iOS SDK 26.x, so the build happens there.
+# image carries Xcode 26.x with the iOS SDK 26.x, so the BUILD happens there.
+#
+# THE BUILD IS UNSIGNED, ON PURPOSE. This used to run a signed archive with
+# -allowProvisioningUpdates and the App Store Connect API key, and Apple answers
+# that by minting a fresh Apple Development certificate on every run (the CI is a
+# different machine each time, so it never presents the one made last time).
+# A paid account holds only three development certs, so after a few runs the
+# archive died with "Choose a certificate to revoke. Your account has reached the
+# maximum number of certificates" - which had nothing to do with the code and hid
+# real compile errors. So the split is now:
+#   CI   - compile + archive with CODE_SIGNING_ALLOWED=NO, upload the .app
+#   Mac  - install_ios_app() drops the .app, embeds a provisioning profile, signs
+#          it with the identity already in Alex's keychain, then installs it.
+# Same signature as a local Xcode build, and no certificate is ever created.
 #
 # A runner has no USB, so the artifact reaches the phone through the Mac:
 #   xcrun devicectl device install app --device <udid> ./Bishop.app
 # (devicectl ships with Xcode 15 and does not care which SDK built the bundle.)
 #
 # SECRETS - this repo is public, so nothing about Alex's setup may be committed:
-#   BUILD_CERT_P12   (optional) base64 of an Apple Development identity as .p12
-#   BUILD_CERT_PASS  (optional) the password given to Keychain Access at export
-#   ASC_KEY_ID       App Store Connect API key id      (Users and Access -> Integrations)
-#   ASC_ISSUER_ID    its issuer id
-#   ASC_KEY_P8       the downloaded AuthKey_XXXXX.p8, either pasted as-is
-#                    or base64 encoded (encoded is safer for a messy paste)
 #   BISHOP_TOKEN     the webui token, so it is baked into Info.plist
-# With the API key, xcodebuild refreshes the provisioning profile itself; the
-# Apple Development cert alone would also do, but the key cannot expire mid-run.
+# No certificate or App Store Connect key is needed any more; the ASC_* secrets
+# are leftovers from the signed-archive era and can be deleted.
 
 name: iOS 26 build
 
@@ -43,7 +50,6 @@ env:
   # The Mac's address on the LAN. Follows this repo's convention of not being a
   # secret: only the token is.
   BISHOP_HOST: 192.168.2.12:8420
-  KEYCHAIN_PASS: bishop-ci
 
 jobs:
   build:
@@ -65,66 +71,13 @@ jobs:
           sudo xcode-select -s "$newest"
           xcodebuild -version
 
-      - name: Import the signing identity into a throwaway keychain
-        env:
-          CERT_P12: ${{ secrets.BUILD_CERT_P12 }}
-          CERT_PASS: ${{ secrets.BUILD_CERT_PASS }}
-        run: |
-          # Optional. With the App Store Connect API key below, xcodebuild can
-          # fetch or create the development identity itself, so this is only for
-          # pinning a specific certificate. Skipping it is fine.
-          if [ -z "$CERT_P12" ]; then
-            echo "BUILD_CERT_P12 is empty, leaving it to the API key"
-            exit 0
-          fi
-          # A runner starts with no identity, and codesign cannot answer a
-          # password prompt, so the cert goes into an unlocked temporary keychain.
-          echo "$CERT_P12" | base64 --decode > /tmp/cert.p12
-          security create-keychain -p "$KEYCHAIN_PASS" build.keychain
-          security set-keychain-settings -lut 3600 build.keychain
-          security unlock-keychain -p "$KEYCHAIN_PASS" build.keychain
-          security import /tmp/cert.p12 -k build.keychain -P "$CERT_PASS" \
-            -T /usr/bin/codesign -T /usr/bin/security
-          security set-key-partition-list -S apple-tool:,apple:,codesign: \
-            -s -k "$KEYCHAIN_PASS" build.keychain
-          security list-keychains -d user -s build.keychain $(security list-keychains -d user | tr -d '"')
-          rm -f /tmp/cert.p12
-          security find-identity -v -p codesigning
-
-
-      - name: Write the App Store Connect API key
-        env:
-          KEY_P8: ${{ secrets.ASC_KEY_P8 }}
-          KEY_ID: ${{ secrets.ASC_KEY_ID }}
-        run: |
-          # ASC_KEY_P8 is accepted in either form: the downloaded AuthKey_*.p8
-          # pasted as-is (it is already a PEM, base64 inside BEGIN/END lines) or
-          # that same file base64 encoded - the encoded form is just a one-liner
-          # that survives a careless paste. Either way the result must be the
-          # whole file: without the BEGIN/END armor xcodebuild rejects it.
-          case "$KEY_P8" in
-            "-----BEGIN"*) printf '%s\n' "$KEY_P8" > /tmp/asc.p8 ;;
-            *) echo "$KEY_P8" | base64 --decode > /tmp/asc.p8 ;;
-          esac
-          grep -q "BEGIN PRIVATE KEY" /tmp/asc.p8 || {
-            echo "ASC_KEY_P8 is neither a PEM nor its base64"; exit 1; }
-          echo "ASC_KEY_PATH=/tmp/asc.p8" >> "$GITHUB_ENV"
-          # xcodebuild also looks for the key under its own id.
-          mkdir -p ~/private_keys && cp /tmp/asc.p8 ~/private_keys/AuthKey_$KEY_ID.p8
-
       - name: Regenerate the Xcode project
         run: |
           # project.yml is the source of truth; the .xcodeproj is generated.
           brew install xcodegen || true
           xcodegen generate
 
-      # Before spending the signed archive on Apple's certificate quota: does
-      # the code even COMPILE against the iOS 26 SDK? Signing is off here, so
-      # this step cannot fail for a certificate reason, which is what tells the
-      # two apart - "Choose a certificate to revoke" used to hide the compile
-      # result entirely, so a real error in Sources/ was indistinguishable from
-      # an account problem.
-      - name: Compile against the iOS 26 SDK (no signing, no quota)
+      - name: Compile against the iOS 26 SDK
         run: |
           xcodebuild -project Bishop.xcodeproj -scheme "$SCHEME" \
             -configuration Debug \
@@ -135,32 +88,34 @@ jobs:
             build | tail -40
           echo "compiles clean against $(xcrun --sdk iphoneos --show-sdk-version)"
 
-      - name: Build and sign
+      - name: Archive, unsigned
         env:
           TOKEN: ${{ secrets.BISHOP_TOKEN }}
-          KEY_ID: ${{ secrets.ASC_KEY_ID }}
-          ISSUER: ${{ secrets.ASC_ISSUER_ID }}
         run: |
           # PRODUCT_BUNDLE_IDENTIFIER is set here rather than relying on the
           # generated project, so the workspace owner can point the build at a
           # different app id without editing anything.
+          #
+          # CODE_SIGNING_ALLOWED=NO keeps xcodebuild away from the developer
+          # portal: no profile is requested, no certificate is created, and the
+          # three-cert account limit cannot be hit. The Mac signs the result.
           xcodebuild -project Bishop.xcodeproj -scheme "$SCHEME" \
             -configuration Release \
             -destination 'generic/platform=iOS' \
             -archivePath "$PWD/build/Bishop.xcarchive" \
-            -allowProvisioningUpdates \
-            -authenticationKeyPath "$ASC_KEY_PATH" \
-            -authenticationKeyID "$KEY_ID" \
-            -authenticationKeyIssuerID "$ISSUER" \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" CODE_SIGN_ENTITLEMENTS="" \
             PRODUCT_BUNDLE_IDENTIFIER="$BUNDLE_ID" \
-            CODE_SIGN_STYLE=Automatic \
             BISHOP_TOKEN="$TOKEN" BISHOP_HOST="$BISHOP_HOST" \
             archive
 
-      - name: Check what the binary was actually built against
+      - name: Stage the bundle and check what it was built against
         run: |
           APP="build/Bishop.xcarchive/Products/Applications/Bishop.app"
           cp -R "$APP" ./Bishop.app
+          # The unsigned archive has no embedded profile; the Mac puts its own in.
+          test ! -e ./Bishop.app/embedded.mobileprovision
+          ls -l ./Bishop.app/Bishop
           # Look for "sdk 26.x" below. An 18.x would mean the SDK was not picked
           # up and the whole exercise was pointless.
           xcrun vtool -show-build ./Bishop.app/Bishop | grep -A3 'platform IOS' || true
