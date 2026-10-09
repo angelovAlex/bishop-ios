@@ -538,7 +538,14 @@ extension View {
     @ViewBuilder func barButton(_ glass: Bool) -> some View {
         if glass {
             #if compiler(>=6.2)
-            self.buttonStyle(.glass)
+            // The compiler gate says the SDK HAS .glass; this one says the OS is
+            // new enough to RUN it. Both are needed - dropping this check is a
+            // compile error, not a fallback.
+            if #available(iOS 26.0, *) {
+                self.buttonStyle(.glass)
+            } else {
+                self.buttonStyle(.bordered)
+            }
             #else
             self.buttonStyle(.bordered)
             #endif
