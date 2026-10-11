@@ -175,8 +175,8 @@ struct ChatView: View {
                             .id(e.id)
                             // The live thought is the one row that can also get
                             // SHORTER (its paragraph is replaced), so it is
-                            // measured: see FollowGrowth.
-                            .modifier(FollowGrowth(
+                            // measured: see HoldHeight.
+                            .modifier(HoldHeight(
                                 active: e.kind == .thought && e.open && e.id == events.last?.id,
                                 grown: { follow(proxy) }))
                     }
@@ -188,7 +188,7 @@ struct ChatView: View {
             .scrollDismissesKeyboard(.interactively)
             .onChange(of: events.count) { follow(proxy) }
             .onChange(of: events.last?.text) { _, _ in
-                // A live thought is measured instead - FollowGrowth - because it
+                // A live thought is measured instead - HoldHeight - because it
                 // is also the one row that can SHRINK: following a replaced
                 // paragraph on every token is what dragged the transcript down.
                 // Past its cap the block scrolls inside itself, so the newest
@@ -683,33 +683,55 @@ struct ThoughtBlock: View {
 }
 
 
-/// Scroll the transcript down only while the measured row GROWS.
+/// Hold the measured row's height while it is the live one, and scroll only
+/// when it GROWS.
 ///
-/// The live thought is the one row that also gets SHORTER: the model ends a
-/// paragraph, the block replaces it with the next one, and following that - as
-/// an unconditional scrollTo on every token did - dragged the whole transcript
-/// down again and again. Turning taller is the one case that means new text has
-/// arrived, so it is the only one that scrolls.
-private struct FollowGrowth: ViewModifier {
+/// The live thought is the one row that can also get SHORTER: the model ends a
+/// paragraph, the block replaces it with the next one (and the block is capped,
+/// so a long paragraph is not what made the row tall in the first place).
+/// Following that - as an unconditional scrollTo on every token did - dragged
+/// the whole transcript down again and again; and merely letting the row shrink
+/// does the same thing by itself, because the transcript is scrolled to its
+/// bottom: the content loses height, the offset is clamped back, and the whole
+/// conversation slides DOWN by exactly what the row gave up.
+///
+/// So the row is never allowed to be shorter than the tallest it has been while
+/// live: a shorter paragraph renders into that height and the transcript's
+/// content does not change at all. A real growth saves the new height and
+/// scrolls to it.
+///
+/// The held height is expressed as a transparent SIBLING, never as a frame on
+/// the measured view: `.frame(height:)` proposes that height to its child, the
+/// block's body is a flexible ScrollView and simply accepts it, and the
+/// measurement then reads back only what was imposed on it - the row froze at
+/// the height it happened to start with. As a sibling in a ZStack both views get
+/// the incoming proposal, so the row is at least `held` tall while what is
+/// measured stays the content's own, unclamped height.
+private struct HoldHeight: ViewModifier {
     let active: Bool
     let grown: () -> Void
-    @State private var height: CGFloat = 0
+    @State private var held: CGFloat = 0      // the tallest it has been while live
 
     func body(content: Content) -> some View {
-        content.background(
-            GeometryReader { g in
-                Color.clear
-                    .onChange(of: g.size.height) { _, h in
-                        // No previous height (the thought has just started, or
-                        // this row was scrolled far enough out of the LazyVStack
-                        // to be released and rebuilt): there is nothing to be
-                        // shorter than, and the stream's own scroll already
-                        // covers the arrival.
-                        if active && height > 0 && h > height { grown() }
-                        height = h
-                    }
-            }
-        )
+        ZStack(alignment: .top) {
+            Color.clear.frame(height: active ? held : 0)
+            content.background(
+                GeometryReader { g in
+                    Color.clear.onChange(of: g.size.height) { _, h in grew(to: h) }
+                }
+            )
+        }
+    }
+
+    private func grew(to h: CGFloat) {
+        guard active else { return }
+        // The first measurement is the row arriving (a thought starting, or it
+        // being rebuilt after the LazyVStack released it): it is remembered, but
+        // not followed - the stream's own scroll already covers that.
+        let first = held == 0
+        guard h > held else { return }        // shorter is remembered as nothing
+        held = h
+        if !first { grown() }
     }
 }
 
