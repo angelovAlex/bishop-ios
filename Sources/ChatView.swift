@@ -15,7 +15,9 @@ struct ChatView: View {
     @State private var showStats = false
     @State private var fullPicture: String?
     @State private var picking = false        // the session sheet
-    @State private var pinned: UUID?          // a just-sent message, held at the top of the screen
+    @State private var mine: UUID?            // a just-sent message, to be put at the top
+    @State private var content: CGFloat = 0   // how tall the transcript is
+    @State private var viewport: CGFloat = 0  // ...and how much room it has
     @FocusState private var typing: Bool      // the composer's focus, so send() can drop the keyboard
 
     var body: some View {
@@ -173,45 +175,65 @@ struct ChatView: View {
                     ForEach(events) { e in
                         EventRow(event: e, api: api, fullPicture: $fullPicture)
                             .id(e.id)
-                            // The live thought is the one row that can also get
-                            // SHORTER (its paragraph is replaced), so it is
-                            // measured: see HoldHeight.
-                            .modifier(HoldHeight(
-                                active: e.kind == .thought && e.open && e.id == events.last?.id,
-                                grown: { follow(proxy) }))
                     }
                     Color.clear.frame(height: 1).id("bottom")
                 }
                 .padding(.horizontal, 12).padding(.top, 8)
                 .frame(maxWidth: .infinity, alignment: .leading)
+                .background(GeometryReader { g in
+                    Color.clear.onChange(of: g.size.height) { _, h in content = h }
+                })
             }
+            .background(GeometryReader { g in
+                Color.clear.onChange(of: g.size.height) { _, h in viewport = h }
+            })
             .scrollDismissesKeyboard(.interactively)
-            .onChange(of: events.count) { follow(proxy) }
+            // Two events, and only these two: a row appearing at the end, and
+            // text arriving in the last row. Nothing reacts to a block changing
+            // SIZE - that is the whole point. See follow(_:).
+            .onChange(of: events.count) { _, _ in follow(proxy) }
             .onChange(of: events.last?.text) { _, _ in
-                // A live thought is measured instead - HoldHeight - because it
-                // is also the one row that can SHRINK: following a replaced
-                // paragraph on every token is what dragged the transcript down.
-                // Past its cap the block scrolls inside itself, so the newest
-                // line stays in sight even while the transcript sits still.
+                // ...except a live thought: its paragraph is REPLACED as the
+                // model ends one, so following it dragged the transcript down on
+                // every paragraph. Its own inner scroll keeps the newest line in
+                // sight, and the block is capped, so the transcript can sit still.
                 if let e = events.last, e.kind == .thought, e.open { return }
                 follow(proxy)
             }
         }
     }
 
-    /// The newest text in view. Sending is the exception: that append puts the
-    /// user's own message at the TOP of the screen (see `pinned`), so everything
-    /// the answer writes lands in the space below it instead of in the one-line
-    /// strip above the keyboard. While the answer is shorter than the screen the
-    /// bottom-anchored scroll clamps to the top and the pin survives by itself;
-    /// once it outgrows the screen the transcript scrolls normally.
+    /// Bring the newest text into view - and do NOTHING AT ALL when there is
+    /// nothing to bring into view.
+    ///
+    /// The `content > viewport` test is the rule Alex asked for, and it is what
+    /// makes a long chain of thoughts still: while the transcript fits the screen
+    /// everything on it is visible by definition, so a scroll could only move
+    /// what the reader is already looking at, and it is exactly this case that
+    /// appears the moment a block folds or its paragraph is replaced - the
+    /// content falls back under the fold and this stops scrolling. So a block
+    /// resizing under the live edge no longer moves the conversation at all:
+    /// measured on the simulator with every scroll disabled, a whole turn moved a
+    /// tracked row ZERO points, growth and fold alike. Once the content is taller
+    /// than the screen the scroll starts, and from then on it follows the newest
+    /// line - scrolling up only as far as the fold needs, not on every token.
     private func follow(_ proxy: ScrollViewProxy) {
-        if let id = pinned {
-            pinned = nil                   // honoured exactly once, on the send itself
+        // A send is the one scroll that is wanted for its own sake: the user's
+        // message goes to the TOP so the answer has the screen below it.
+        if let id = mine {
+            mine = nil
             withAnimation(.easeOut(duration: 0.25)) { proxy.scrollTo(id, anchor: .top) }
             return
         }
-        withAnimation(.linear(duration: 0.15)) { proxy.scrollTo("bottom", anchor: .bottom) }
+        // One turn later, because `content` comes from a GeometryReader: on a
+        // count change it still holds the height from BEFORE the new row was laid
+        // out, and a stale height is the difference between "this all fits the
+        // screen, leave it alone" and "scroll". Measured: 1477 where the true
+        // height was 1290.
+        DispatchQueue.main.async {
+            guard content > viewport + 1 else { return }
+            withAnimation(.linear(duration: 0.15)) { proxy.scrollTo("bottom", anchor: .bottom) }
+        }
     }
 
     // MARK: counters (one dim line, tap for the report)
@@ -360,9 +382,9 @@ struct ChatView: View {
         // The stream replays the turn, but the user's own line is not echoed
         // back mid-turn, so show it at once - same shape as the web page.
         let echo = paths.isEmpty ? text : text + (text.isEmpty ? "" : "\n") + "[picture]"
-        let mine = ChatEvent(kind: .user, text: echo, imagePath: paths.first ?? "")
-        events.append(mine)
-        pinned = mine.id        // ...at the TOP, so the transcript fills what is left
+        let sent = ChatEvent(kind: .user, text: echo, imagePath: paths.first ?? "")
+        events.append(sent)
+        mine = sent.id          // ...at the TOP, so the transcript fills what is left
         for p in paths { events.append(ChatEvent(kind: .image, imagePath: p)) }
         Task {
             if let problem = await api.send(text: text, paths: paths) {
@@ -679,59 +701,6 @@ struct ThoughtBlock: View {
         var start = end
         while start > 0 && !blank(start - 1) { start -= 1 }  // back to the blank line before it
         return lines[start..<end].joined(separator: "\n")
-    }
-}
-
-
-/// Hold the measured row's height while it is the live one, and scroll only
-/// when it GROWS.
-///
-/// The live thought is the one row that can also get SHORTER: the model ends a
-/// paragraph, the block replaces it with the next one (and the block is capped,
-/// so a long paragraph is not what made the row tall in the first place).
-/// Following that - as an unconditional scrollTo on every token did - dragged
-/// the whole transcript down again and again; and merely letting the row shrink
-/// does the same thing by itself, because the transcript is scrolled to its
-/// bottom: the content loses height, the offset is clamped back, and the whole
-/// conversation slides DOWN by exactly what the row gave up.
-///
-/// So the row is never allowed to be shorter than the tallest it has been while
-/// live: a shorter paragraph renders into that height and the transcript's
-/// content does not change at all. A real growth saves the new height and
-/// scrolls to it.
-///
-/// The held height is expressed as a transparent SIBLING, never as a frame on
-/// the measured view: `.frame(height:)` proposes that height to its child, the
-/// block's body is a flexible ScrollView and simply accepts it, and the
-/// measurement then reads back only what was imposed on it - the row froze at
-/// the height it happened to start with. As a sibling in a ZStack both views get
-/// the incoming proposal, so the row is at least `held` tall while what is
-/// measured stays the content's own, unclamped height.
-private struct HoldHeight: ViewModifier {
-    let active: Bool
-    let grown: () -> Void
-    @State private var held: CGFloat = 0      // the tallest it has been while live
-
-    func body(content: Content) -> some View {
-        ZStack(alignment: .top) {
-            Color.clear.frame(height: active ? held : 0)
-            content.background(
-                GeometryReader { g in
-                    Color.clear.onChange(of: g.size.height) { _, h in grew(to: h) }
-                }
-            )
-        }
-    }
-
-    private func grew(to h: CGFloat) {
-        guard active else { return }
-        // The first measurement is the row arriving (a thought starting, or it
-        // being rebuilt after the LazyVStack released it): it is remembered, but
-        // not followed - the stream's own scroll already covers that.
-        let first = held == 0
-        guard h > held else { return }        // shorter is remembered as nothing
-        held = h
-        if !first { grown() }
     }
 }
 
