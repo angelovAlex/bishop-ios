@@ -550,15 +550,62 @@ struct ChatView: View {
             events.append(fresh)
         case .tool:
             closePhase()
-            if let last = events.last, last.kind == .tool, last.name == row.name {
-                events[events.count - 1].text = row.text
+            // Arguments are re-sent as they stream, so a call already on screen
+            // is UPDATED in place: the row stays one, and its name is what
+            // identifies it when the stream carries no call id.
+            if let i = toolRow(for: row) {
+                events[i].text = row.text
+                if row.view != nil { events[i].view = row.view }
                 return
             }
             events.append(row)
+        case .result:
+            closePhase()
+            // A result joins the call above it (one row per call). With no call
+            // to join it keeps its own row, folded as it always was.
+            guard let i = toolRow(for: nil) else { events.append(row); return }
+            // The verdict was already read off this event while it was decoded,
+            // when its call was in the same batch; a result that arrived alone
+            // (the call long drawn) is judged here, by the same rule.
+            let good = row.ok ?? Self.succeeded(row)
+            events[i].ok = good
+            // A good edit said what happened in its chip; a failure says it here
+            // and nowhere else, so it is kept whatever the view claims.
+            events[i].result = good && row.view?.kind == "ok" ? "" : row.text
+            // The call's view DESCRIBES the row (an edit's chip and diff), the
+            // result's only reports ("ok", true): never overwrite the former.
+            if let v = row.view, events[i].view?.kind != "edit" { events[i].view = v }
         default:
             closePhase()
             events.append(row)
         }
+    }
+
+    /// The row a tool event belongs to. A CALL continues the row just drawn if
+    /// it is the same call - by the provider's id when both have one, otherwise
+    /// by name, since the arguments are re-sent as they stream in. A RESULT
+    /// belongs to the call above it, which is either the call this app just drew
+    /// or, in a stored session replayed as a flat list, the one before it.
+    private func toolRow(for row: ChatEvent?) -> Int? {
+        guard let last = events.indices.last, events[last].kind == .tool else { return nil }
+        guard let row else { return last }
+        if !row.callId.isEmpty && !events[last].callId.isEmpty {
+            return row.callId == events[last].callId ? last : nil
+        }
+        return events[last].name == row.name ? last : nil
+    }
+
+    /// Did a tool result succeed? The event says it in two places and BOTH are
+    /// needed: the Mac's view, when the tool has one, and the plain text, which
+    /// is all a tool without a view has. A result that reports neither ("OK: 7
+    /// tests passed") has succeeded - so the test is for the two ways it can say
+    /// no, and everything else is a yes. Reading it as "yes only on a known ok"
+    /// was how a failed call came back wearing a tick: the server's view for a
+    /// plain tool is {} and the text was the only evidence there was.
+    static func succeeded(_ e: ChatEvent) -> Bool {
+        if e.view?.ok == false { return false }
+        let t = e.text.trimmingCharacters(in: .whitespaces)
+        return !t.hasPrefix("Error") && !t.hasPrefix("Not run")
     }
 
     /// The turn really is running on the Mac now (the stream's `live` counters),
@@ -630,22 +677,19 @@ struct EventRow: View {
         case .thought:
             ThoughtBlock(text: event.text, secs: event.secs, running: event.open)
         case .tool:
+            // One row per call: the call is the summary, the result is inside the
+            // fold. An edit is drawn the way VS Code draws one - a chip with the
+            // file and its line counts - and the changed lines are its fold, so
+            // the chip opens on arrival (the diff is the point) and a tap folds
+            // it away; its full call stays one tap further in.
             if let v = event.view, v.kind == "edit" {
-                // The Mac decided this is a file edit, so draw it the way VS Code
-                // draws one: a chip with the file and its line counts, the
-                // changed lines under it. The full call stays one tap away.
-                EditChip(view: v, raw: event.text)
+                EditChip(view: v, raw: event.text, result: event.ok == false ? event.result : "",
+                         ok: event.ok)
             } else {
-                // "> name {args}", one line, as the page shows it; the full call is
-                // one tap away, pretty-printed.
-                Collapsible(summary: "› \(event.name) \(event.text)".prefix(120).description,
-                            text: Self.prettyJSON(event.text) ?? event.text,
-                            mono: true, tint: .yellow)
+                ToolRow(event: event)
             }
-        case .detail:
-            // An edit whose chip is already above has said what happened; the
-            // quieter "checkmark file" was one more line saying it again. Any
-            // other tool result keeps its fold.
+        case .result:
+            // A tool result with no call above it to join. Folded, as before.
             if let v = event.view, v.kind == "ok", v.ok { EmptyView() }
             else { Collapsible(summary: event.name, text: event.text, mono: true, tint: .gray) }
         case .image:
@@ -683,6 +727,63 @@ struct EventRow: View {
               let t = String(data: p, encoding: .utf8) else { return nil }
         return t
     }
+}
+
+/// A plain tool call and its result: ONE row. The call is the line; the fold
+/// holds the whole call, pretty-printed, and what the tool answered. It is born
+/// looking like a call ("name {args}") because that is what has happened so far,
+/// and gains a green tick (or a red cross) the moment the tool answers.
+///
+/// A failure opens the fold on its own: the reason ("Error: no such file") is
+/// the only place it is written down, and an unasked tap is a small price for
+/// never hiding why something did not run.
+struct ToolRow: View {
+    let event: ChatEvent
+    @State private var open = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(alignment: .top, spacing: 5) {
+                Text(open ? "\u{25BE}" : "\u{25B8}").font(.system(size: 10)).foregroundStyle(.gray)
+                Text(event.name + " " + event.text)
+                    .font(.system(size: 12, design: .monospaced))
+                    .foregroundStyle(Color.yellow.opacity(0.8)).lineLimit(2)
+                    .multilineTextAlignment(.leading)
+                if let ok = event.ok {
+                    Text(ok ? "\u{2713}" : "\u{2717}")
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundStyle(ok ? ToolRow.green : ToolRow.red)
+                }
+            }
+            .contentShape(Rectangle())
+            .onTapGesture { withAnimation(.easeInOut(duration: 0.15)) { open.toggle() } }
+            if open, !fold.isEmpty {
+                Text(fold).font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(.gray).textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.leading, 12)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        // A failure opens itself: its reason is written down nowhere else. Both
+        // halves are needed - onAppear for a session replayed from disk (the row
+        // is built with ok already set, so nothing ever CHANGES), onChange for
+        // the live stream, where the row is born without it.
+        .onAppear { if event.ok == false { open = true } }
+        .onChange(of: event.ok) { _, now in if now == false { open = true } }
+    }
+
+    /// What the fold holds: the call as it was made, then the answer. Raw JSON is
+    /// kept alongside the pretty version because a fold is also for copying.
+    private var fold: String {
+        var s = ""
+        if !event.text.isEmpty { s = "call\n" + (EventRow.prettyJSON(event.text) ?? event.text) }
+        if !event.result.isEmpty { s += (s.isEmpty ? "" : "\n\n") + "result\n" + event.result }
+        return s
+    }
+
+    private static let green = Color(red: 0.4, green: 0.85, blue: 0.5)
+    private static let red = Color(red: 1.0, green: 0.45, blue: 0.45)
 }
 
 /// Bishop's thoughts: dim, and folded the moment the answer or a tool call begins
@@ -821,6 +922,8 @@ struct ThoughtBlock: View {
 struct EditChip: View {
     let view: ToolView
     let raw: String
+    var result = ""                     // a failure's own words, if it had any
+    var ok: Bool? = nil                 // nil until the result arrived
     @State private var open = true
     @State private var showCall = false
 
@@ -842,6 +945,11 @@ struct EditChip: View {
                 .clipShape(RoundedRectangle(cornerRadius: 6))
                 .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Color(white: 0.2)))
                 .onTapGesture { withAnimation(.easeInOut(duration: 0.15)) { open.toggle() } }
+                if let ok {
+                    Text(ok ? "\u{2713}" : "\u{2717}")
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundStyle(ok ? EditChip.green : EditChip.red)
+                }
             }
             if open, !view.rows.isEmpty {
                 // Scrolls sideways rather than wrapping: a wrapped line pushes
@@ -867,6 +975,14 @@ struct EditChip: View {
                     Text(EventRow.prettyJSON(raw) ?? raw)
                         .font(.system(size: 10, design: .monospaced))
                         .foregroundStyle(.gray).padding(.leading, 4)
+                }
+                // An edit that FAILED has one thing to say that the chip cannot:
+                // the tool's own message ("old_text not found in X"). It goes in
+                // the fold, under the diff, and never gets folded away by us.
+                if !result.isEmpty {
+                    Text(result).font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(EditChip.red.opacity(0.9))
+                        .frame(maxWidth: .infinity, alignment: .leading).padding(.top, 2)
                 }
             }
         }

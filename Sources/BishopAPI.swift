@@ -26,7 +26,7 @@ import Foundation
 /// and rows are grouped that way so a thought folds as one line instead of the
 /// transcript turning into a wall of loose fragments.
 struct ChatEvent: Identifiable {
-    enum Kind { case user, thought, answer, tool, detail, image, info, error }
+    enum Kind { case user, thought, answer, tool, result, image, info, error }
     let id = UUID()
     var kind: Kind
     var text = ""               // reasoning, answer, tool arguments, result, info
@@ -37,6 +37,12 @@ struct ChatEvent: Identifiable {
     var secs = 0                // how long it ran, once folded, and only when measured
     var started = Date()
     var view: ToolView?         // how the Mac wants this tool row DRAWN, if it wants more than text
+    var callId = ""             // the provider's tool call id, so a result finds its call
+    // A tool call and its result are ONE row: the call is the summary and the
+    // result sits inside the fold, so these two live on the call's own row
+    // rather than making a row of their own (webui.html addTool/addToolResult).
+    var result = ""             // what the tool answered, once it has
+    var ok: Bool?               // nil until it answered, then did it succeed
 }
 
 /// A tool call as a designed row rather than a line of JSON, decided on the Mac
@@ -281,6 +287,7 @@ final class BishopAPI: ObservableObject {
         var out: [ChatEvent] = []
         var thought: Int?      // index of the thought taking text right now, nil once closed
         var answer: Int?       // same, for the answer bubble
+        var tool: Int?         // the row a tool result belongs to, once its call was drawn
         // `secs` is NOT set here: this pass groups a live BATCH as well as a
         // replay, and folding one on arrival stamped every thought with the
         // second it had been in the array - which is why a running thought read
@@ -288,6 +295,20 @@ final class BishopAPI: ObservableObject {
         // that number while it ran). A stored session has no timings to give, so
         // it keeps 0 and the block says "thought"; a live one is timed by
         // ChatView.closePhase, which knows when the thought started.
+        /// Which call does this event belong to? The provider's call id, when
+        /// there is one - so two identical calls in a turn are two rows. A
+        /// session stored without ids falls back to the name.
+        func sameCall(_ e: [String: Any], _ row: ChatEvent) -> Bool {
+            let id = e["id"] as? String ?? ""
+            if !id.isEmpty && !row.callId.isEmpty { return id == row.callId }
+            return row.name == (e["name"] as? String ?? row.name)
+        }
+        /// A tool answers with a plain string, so a failure is a prefix - unless
+        /// the Mac's view said so outright (ok == false).
+        func failed(_ body: String) -> Bool {
+            let t = body.trimmingCharacters(in: .whitespaces)
+            return t.hasPrefix("Error") || t.hasPrefix("Not run")
+        }
         func closeThought() {
             if let i = thought { out[i].open = false }
             thought = nil
@@ -317,14 +338,37 @@ final class BishopAPI: ObservableObject {
                 // Also shows Bishop's work from sessions with no stored events,
                 // where tools arrive as "<name> {...}" lines of the answer text.
                 closeThought(); closeAnswer()
-                out.append(ChatEvent(kind: .tool, text: e["arguments"] as? String ?? "",
-                                     name: e["name"] as? String ?? "tool",
-                                     view: ToolView(e["view"] as? [String: Any])))
+                if let i = tool, sameCall(e, out[i]) {
+                    // The arguments are re-sent with every delta: the last one
+                    // wins, so the row is updated rather than doubled.
+                    out[i].text = e["arguments"] as? String ?? ""
+                    if let v = ToolView(e["view"] as? [String: Any]) { out[i].view = v }
+                } else {
+                    out.append(ChatEvent(kind: .tool, text: e["arguments"] as? String ?? "",
+                                         name: e["name"] as? String ?? "tool",
+                                         view: ToolView(e["view"] as? [String: Any]),
+                                         callId: e["id"] as? String ?? ""))
+                }
+                tool = out.count - 1
             case "tool_result":
+                // The result belongs to the call above it: it goes ON that row
+                // (its fold), which is the whole point - two events, one line.
                 let body = (e["result"] as? String) ?? ""
+                let view = ToolView(e["view"] as? [String: Any])
                 closeThought(); closeAnswer()
-                out.append(ChatEvent(kind: .detail, text: body, name: "result",
-                                     view: ToolView(e["view"] as? [String: Any])))
+                let good = !(view?.ok == false) && !failed(body)
+                if let i = tool {
+                    // A good edit's chip already said what happened, so its text
+                    // is noise; a FAILED one is the only place that says why and
+                    // must never be swallowed.
+                    out[i].ok = good
+                    out[i].result = good && view?.kind == "ok" ? "" : body
+                    // A result's view REPORTS ("ok", true); the call's view
+                    // DESCRIBES (an edit's chip and diff). Keep the description.
+                    if let v = view, out[i].view?.kind != "edit" { out[i].view = v }
+                } else {
+                    out.append(ChatEvent(kind: .result, text: body, name: "result", view: view))
+                }
             case "image":
                 out.append(ChatEvent(kind: .image, name: e["title"] as? String ?? "",
                                      imagePath: e["path"] as? String ?? ""))
