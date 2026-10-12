@@ -18,7 +18,6 @@ struct ChatView: View {
     @State private var mine: UUID?            // a just-sent message, to be put at the top
     @State private var content: CGFloat = 0   // how tall the transcript is
     @State private var viewport: CGFloat = 0  // ...and how much room it has
-    @State private var held: CGFloat = 0      // the tallest it has been (see heldHeight)
     @State private var following = true       // follow the newest text: the reader is at the bottom
     @State private var belowFold = false      // ...and the newest text is below the fold right now
     @State private var dragging = false       // a finger (or its momentum) is moving the transcript
@@ -205,17 +204,20 @@ struct ChatView: View {
                 // read differently than the finger meant - left it off for good.
                 // The symptom was Alex's: after the thinking block folded there
                 // was no automatic scroll any more and he had to scroll by hand
-                // for the rest of the session.
+                // for the rest of the session. Not while a finger is on it,
+                // though: mid-drag the reader is deciding, not at rest.
                 if !below, !dragging { following = true }
-            } onPhase: { idle, byReader in
-                // A gesture in flight owns the transcript: following the newest
-                // text now would fight the reader's finger.
-                dragging = !idle
-                // Only a READER's gesture may switch following off, and only when
-                // it comes to rest away from the bottom. A scroll this view makes
-                // is never byReader, so it cannot turn its own scrolling into "the
-                // reader has taken over".
-                if idle, byReader, belowFold { following = false }
+            } onPhase: { touching, settledByReader in
+                // ONLY a finger, or the momentum it left behind, blocks following.
+                // Not "not idle": this view's own scrolls report `.animating`, and
+                // treating that as the reader meant that while text was arriving -
+                // and the animation was being retargeted over and over - dragging
+                // stayed true almost permanently and follow() returned early every
+                // single time. That was "autoscroll does not work at all".
+                dragging = touching
+                // And only a reader's gesture may change the reader's place, once
+                // it has come to rest.
+                if settledByReader { following = !belowFold }
             })
             // What needs following, and the ORDER here is the whole trick: it is
             // the newest text ending up BELOW THE FOLD that is watched, not the
@@ -966,10 +968,14 @@ struct ConnectBanner: View {
 /// shrinking, and pulling the chat there is the jump this design exists to
 /// prevent. So the direction of the fix depends on this.
 ///
-/// `idle`: is the scroll at rest and did nobody touch it, or is it a gesture
-/// (or its momentum)? Only the reader may change whether the transcript follows:
-/// a scroll this view makes itself arrives as `.animating`, so it cannot be
-/// mistaken for the reader having taken over.
+/// `touching`: is a finger on the transcript, or the momentum it left behind?
+/// ONLY these may block following. A scroll this view makes itself arrives as
+/// `.animating`, and treating that as the reader's was a bug that stopped
+/// autoscroll completely: while text streams, an animation is retargeted over
+/// and over, so `.animating` was nearly continuous and follow() never ran.
+///
+/// `settledByReader`: did a reader's gesture just come to rest? That is the only
+/// moment the reader's place may be re-decided.
 ///
 /// Both need iOS 18, and a lower deployment target cannot see the API at all
 /// (a missing symbol is a compile error even inside `#available`). There the
@@ -979,7 +985,7 @@ struct ConnectBanner: View {
 private struct TranscriptScroll: ViewModifier {
     /// Is the newest line below the fold? (called as the scroll moves)
     let onBottom: (Bool) -> Void
-    /// (is the scroll at rest, did a READER's gesture bring it there?)
+    /// (is a finger or its momentum moving it, did a READER's gesture just settle)
     let onPhase: (Bool, Bool) -> Void
 
     func body(content: Content) -> some View {
@@ -998,16 +1004,14 @@ private struct TranscriptScroll: ViewModifier {
                 }
                 .onScrollPhaseChange { old, new in
                     // The phases only a finger can produce. `.animating` is what a
-                    // programmatic scroll looks like until it settles, so it does
-                    // not count as the reader - which matters because the send
-                    // jump is exactly such a scroll, and it must not look like the
-                    // reader having taken over.
-                    func reader(_ p: ScrollPhase) -> Bool {
+                    // programmatic scroll looks like, and it is NOT the reader -
+                    // which matters because this view's own scrolls are exactly
+                    // that, and while text streams they are being retargeted
+                    // constantly.
+                    func byFinger(_ p: ScrollPhase) -> Bool {
                         p == .tracking || p == .interacting || p == .decelerating
                     }
-                    // "at rest AND a reader" is only true on the transition OUT of
-                    // a reader phase.
-                    onPhase(new == .idle, new == .idle && reader(old))
+                    onPhase(byFinger(new), new == .idle && byFinger(old))
                 }
         } else {
             content
