@@ -680,7 +680,7 @@ struct EventRow: View {
         case .tool:
             // One row per call: the call is the summary, the result is inside the
             // fold. An EDIT is drawn the way VS Code draws one and a READ of a
-            // file wears the SAME chip - the file with its language badge and,
+            // file wears the SAME chip - the file with its blue glyph and,
             // for a read, the lines it covered - so both open on arrival (the
             // content is the point) and a tap folds them away; the full call
             // stays one tap further in.
@@ -921,10 +921,10 @@ struct ThoughtBlock: View {
 
 
 /// A file edit or a file read, drawn the way VS Code writes it in a transcript:
-/// the file in a chip - language badge, name, what this call did to it - and the
-/// content under it. A read says ", lines 1 to 19" after the chip, an edit says
-/// nothing there because its counts are inside it. Both kinds are this one body,
-/// because one view means one place to fix.
+/// the file in a chip - its glyph in blue, its name, what this call did to it -
+/// and the content under it. A read says ", lines 1 to 19" after the chip, an edit
+/// says nothing there because its counts are inside it. Both kinds are this one
+/// body, because one view means one place to fix.
 struct EditChip: View {
     let view: ToolView
     let raw: String
@@ -939,14 +939,17 @@ struct EditChip: View {
     private var span: String {
         read && !view.span.isEmpty ? ", \(view.span)" : ""
     }
-    /// An edit counts +/-; a read's chip holds only the file, so a read of ONE
-    /// line needs its span to say anything at all.
+    /// An edit counts +/- in green and red; a read's chip holds only the file, so a
+    /// read of ONE line needs its span out there to say anything at all.
     private var counts: Text? {
         if read { return nil }
         guard view.added > 0 || view.removed > 0 else { return nil }
-        let plus = view.added > 0 ? "+\(view.added)" : ""
-        let minus = view.removed > 0 ? "-\(view.removed)" : ""
-        return Text(plus + (view.added > 0 && view.removed > 0 ? " " : "") + minus)
+        let plus = view.added > 0 ? Text("+\(view.added)").foregroundStyle(EditChip.green)
+                                  : Text("")
+        let gap = view.added > 0 && view.removed > 0 ? Text(" ") : Text("")
+        let minus = view.removed > 0 ? Text("-\(view.removed)").foregroundStyle(EditChip.red)
+                                     : Text("")
+        return plus + gap + minus
     }
 
     var body: some View {
@@ -967,8 +970,12 @@ struct EditChip: View {
                 // hugs the box instead of floating a stack-spacing away from it.
                 HStack(spacing: 0) {
                     HStack(spacing: 5) {
-                        Text(view.lang.uppercased())
-                            .font(.system(size: 10, weight: .bold)).foregroundStyle(EditChip.blue)
+                        // The file's glyph in its blue: a pencil for an edit, a
+                        // FILE for a read - which is what says "this was read,
+                        // not changed" at a glance. It was briefly a language
+                        // badge (TS, PY) and Alex asked for the glyph back.
+                        Image(systemName: read ? "doc.text" : "pencil.tip.crop.circle")
+                            .font(.system(size: 12, weight: .bold)).foregroundStyle(EditChip.blue)
                         Text(view.title).foregroundStyle(Color(white: 0.92)).lineLimit(1)
                         counts
                     }

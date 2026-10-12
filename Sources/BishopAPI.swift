@@ -63,7 +63,6 @@ struct ToolView {
     var ok = true               // for kind == ok: did the tool succeed
     var added = 0
     var removed = 0
-    var lang = ""               // the chip's language badge, "ts" for x.ts
     var span = ""               // what a read covered: "lines 1 to 19"
     var rows: [Row] = []
 
@@ -105,7 +104,6 @@ struct ToolView {
         ok = d["ok"] as? Bool ?? true
         added = d["added"] as? Int ?? 0
         removed = d["removed"] as? Int ?? 0
-        lang = d["lang"] as? String ?? ""
         span = d["span"] as? String ?? ""
         rows = (d["rows"] as? [[String: Any]] ?? []).map {
             Row(tag: $0["tag"] as? String ?? "eq", text: $0["t"] as? String ?? "")
