@@ -18,6 +18,7 @@ struct ChatView: View {
     @State private var mine: UUID?            // a just-sent message, to be put at the top
     @State private var content: CGFloat = 0   // how tall the transcript is
     @State private var viewport: CGFloat = 0  // ...and how much room it has
+    @State private var held: CGFloat = 0      // the tallest it has been (see heldHeight)
     @State private var following = true       // follow the newest text: the reader is at the bottom
     @State private var belowFold = false      // ...and the newest text is below the fold right now
     @State private var dragging = false       // a finger (or its momentum) is moving the transcript
@@ -280,11 +281,14 @@ struct ChatView: View {
             // scroll to and so never followed anything at all.)
             if canMeasure { guard belowFold else { return } }
             else { guard content > viewport + 1 else { return } }
-            // NOT animated: a stream sends text faster than a 0.15s animation
-            // completes, so every new word would restart an unfinished scroll and
-            // the transcript would trail behind in visible steps. An instant snap
-            // to the line that just arrived is what a chat stream wants.
-            proxy.scrollTo("bottom", anchor: .bottom)
+            // A short LINEAR animation, not none and not a spring: text arrives
+            // continuously, so this is retargeted before it finishes and the
+            // result is a steady glide. A snap reads as a jump (Alex: "it just
+            // jumps to new line without animation") and a spring overshoots and
+            // fights the next one.
+            withAnimation(.linear(duration: 0.12)) {
+                proxy.scrollTo("bottom", anchor: .bottom)
+            }
         }
     }
 
@@ -683,6 +687,9 @@ struct ThoughtBlock: View {
     let secs: Int               // 0 while the thought is still running
     let running: Bool           // the turn is being written right now
     @State private var expanded = false
+    /// The tallest this block has ever been. It only ever goes up, and the block
+    /// never renders shorter than it - see body.
+    @State private var held: CGFloat = 0
 
     /// Past this the block stops growing and scrolls inside itself, so a long
     /// paragraph cannot take the screen away from the transcript.
@@ -748,8 +755,27 @@ struct ThoughtBlock: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                 Color.clear.frame(height: 1).id("tail")
             }
+            // Measured on the INNER stack, which the ScrollView lays out at its
+            // own natural height: were this on the ScrollView instead, the frame
+            // below would be proposed to it and the reader would just measure
+            // back the height it had been handed. Peaks only, so a paragraph
+            // replaced by a shorter one does not make the block shrink.
+            .background(GeometryReader { g in
+                Color.clear.onChange(of: g.size.height) { _, h in
+                    let capped = min(h, Self.maxBody)
+                    if capped > held { held = capped }
+                }
+            })
         }
-        .frame(maxHeight: Self.maxBody)
+        // The HEIGHT half of "scroll down only", and the one that actually
+        // matters: while a thought runs it is rewritten paragraph by paragraph,
+        // and a paragraph is any number of lines, so the block's natural height
+        // breathes. Every one of those changes moves whatever is on screen -
+        // which is what Alex kept seeing, and no scroll rule can undo it. Holding
+        // the tallest height the thought has reached makes the block a fixed
+        // panel: it only ever grows, so the only thing left to do with the
+        // transcript is follow the new line DOWN.
+        .frame(height: held > 0 ? held : nil)
         // Shorter than the cap means there is nothing to scroll: no bounce, no
         // rubber band, the block simply sits there at its natural height.
         .scrollBounceBehavior(.basedOnSize)
