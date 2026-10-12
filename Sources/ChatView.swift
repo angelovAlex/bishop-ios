@@ -197,17 +197,25 @@ struct ChatView: View {
             // Only this decides whether a scroll would be a scroll DOWN.
             .modifier(TranscriptScroll { below in
                 belowFold = below
+                // RE-ARM on the fact that matters: the transcript is at the
+                // bottom, so that is the reader's place and following resumes.
+                // Without this the flag could only ever be switched back on by a
+                // gesture that happened to END exactly at the bottom, and one
+                // that ended a moment early - or any moment where the geometry
+                // read differently than the finger meant - left it off for good.
+                // The symptom was Alex's: after the thinking block folded there
+                // was no automatic scroll any more and he had to scroll by hand
+                // for the rest of the session.
+                if !below, !dragging { following = true }
             } onPhase: { idle, byReader in
                 // A gesture in flight owns the transcript: following the newest
                 // text now would fight the reader's finger.
                 dragging = !idle
-                // ...and only the END of a READER's gesture decides the reader's
-                // place: newest line on screen -> follow it; anywhere else ->
-                // leave them where they are. A scroll this view makes (the send
-                // jump, or following the answer) is never byReader, which is what
-                // keeps it from turning its own scrolling into "the reader has
-                // taken over".
-                if idle, byReader { following = !belowFold }
+                // Only a READER's gesture may switch following off, and only when
+                // it comes to rest away from the bottom. A scroll this view makes
+                // is never byReader, so it cannot turn its own scrolling into "the
+                // reader has taken over".
+                if idle, byReader, belowFold { following = false }
             })
             // What needs following, and the ORDER here is the whole trick: it is
             // the newest text ending up BELOW THE FOLD that is watched, not the
