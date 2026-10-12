@@ -18,6 +18,10 @@ struct ChatView: View {
     @State private var mine: UUID?            // a just-sent message, to be put at the top
     @State private var content: CGFloat = 0   // how tall the transcript is
     @State private var viewport: CGFloat = 0  // ...and how much room it has
+    @State private var following = true       // follow the newest text: the reader is at the bottom
+    @State private var belowFold = false      // ...and the newest text is below the fold right now
+    @State private var dragging = false       // a finger (or its momentum) is moving the transcript
+    @State private var placing = false        // a just-sent message is on its way to the top
     @FocusState private var typing: Bool      // the composer's focus, so send() can drop the keyboard
 
     var body: some View {
@@ -188,52 +192,103 @@ struct ChatView: View {
                 Color.clear.onChange(of: g.size.height) { _, h in viewport = h }
             })
             .scrollDismissesKeyboard(.interactively)
-            // Two events, and only these two: a row appearing at the end, and
-            // text arriving in the last row. Nothing reacts to a block changing
-            // SIZE - that is the whole point. See follow(_:).
+            // Where the newest text is: below the fold, or already on screen?
+            // Only this decides whether a scroll would be a scroll DOWN.
+            .modifier(TranscriptScroll { below in
+                belowFold = below
+            } onPhase: { idle, byReader in
+                // A gesture in flight owns the transcript: following the newest
+                // text now would fight the reader's finger.
+                dragging = !idle
+                // ...and only the END of a READER's gesture decides the reader's
+                // place: newest line on screen -> follow it; anywhere else ->
+                // leave them where they are. A scroll this view makes (the send
+                // jump, or following the answer) is never byReader, which is what
+                // keeps it from turning its own scrolling into "the reader has
+                // taken over".
+                if idle, byReader { following = !belowFold }
+            })
+            // What needs following, and the ORDER here is the whole trick: it is
+            // the newest text ending up BELOW THE FOLD that is watched, not the
+            // text arriving. On the text change alone the geometry still says
+            // "the bottom is on screen" - it is the layout that follows that
+            // pushes it down - so a text-driven scroll sees nothing to do, does
+            // nothing, and the transcript freezes with the new line hidden. The
+            // geometry change is the moment there is really something to fix. It
+            // is also, by construction, only ever a DOWNWARD fix: a block that
+            // shrinks (a thought rewritten as a shorter paragraph) moves the
+            // bottom UP, belowFold goes false, and nothing is scrolled at all -
+            // which is exactly the stillness Alex asked for.
+            .onChange(of: belowFold) { _, _ in follow(proxy) }
             .onChange(of: events.count) { _, _ in follow(proxy) }
-            .onChange(of: events.last?.text) { _, _ in
-                // ...except a live thought: its paragraph is REPLACED as the
-                // model ends one, so following it dragged the transcript down on
-                // every paragraph. Its own inner scroll keeps the newest line in
-                // sight, and the block is capped, so the transcript can sit still.
-                if let e = events.last, e.kind == .thought, e.open { return }
-                follow(proxy)
-            }
+            .onChange(of: events.last?.text) { _, _ in follow(proxy) }
+            // The keyboard is the third reason the newest line can end up hidden,
+            // and the one that was reported: the composer takes the room the live
+            // thinking block was using, so the block slides under the fold with no
+            // text having changed.
+            .onChange(of: viewport) { _, _ in follow(proxy) }
         }
     }
 
-    /// Bring the newest text into view - and do NOTHING AT ALL when there is
-    /// nothing to bring into view.
+    /// Bring the newest text back into view - DOWNWARDS ONLY, and only while the
+    /// reader is at the newest text. Both halves are load-bearing:
     ///
-    /// The `content > viewport` test is the rule Alex asked for, and it is what
-    /// makes a long chain of thoughts still: while the transcript fits the screen
-    /// everything on it is visible by definition, so a scroll could only move
-    /// what the reader is already looking at, and it is exactly this case that
-    /// appears the moment a block folds or its paragraph is replaced - the
-    /// content falls back under the fold and this stops scrolling. So a block
-    /// resizing under the live edge no longer moves the conversation at all:
-    /// measured on the simulator with every scroll disabled, a whole turn moved a
-    /// tracked row ZERO points, growth and fold alike. Once the content is taller
-    /// than the screen the scroll starts, and from then on it follows the newest
-    /// line - scrolling up only as far as the fold needs, not on every token.
+    /// `following` is off the moment the reader scrolls away from the newest line
+    /// (see TranscriptScroll, which listens to the scroll phase), so a turn in
+    /// flight cannot drag them back to the bottom, and it comes back on when they
+    /// return there.
+    ///
+    /// The `below` test is what makes this direction-only. Reaching for the
+    /// bottom would also "fix" the case where the newest line is ABOVE the fold,
+    /// which is what a shrinking block does - and pulling the chat up there is
+    /// exactly the jump Alex rejected automatic binding for. If the bottom is
+    /// already on screen there is nothing to do, so the block simply keeps its
+    /// held height and the chat sits perfectly still.
     private func follow(_ proxy: ScrollViewProxy) {
-        // A send is the one scroll that is wanted for its own sake: the user's
-        // message goes to the TOP so the answer has the screen below it.
+        // A send is the one scroll wanted for its own sake: the user's message
+        // goes to the TOP so the answer has the screen below it.
         if let id = mine {
             mine = nil
-            withAnimation(.easeOut(duration: 0.25)) { proxy.scrollTo(id, anchor: .top) }
+            following = true            // ...and then the answer is to be followed
+            // `placing` until the jump has landed, or the geometry it produces -
+            // the message at the top, everything else below the fold - would read
+            // as "the newest line is hidden" and be undone on the next line.
+            placing = true
+            withAnimation(.easeOut(duration: 0.25)) {
+                proxy.scrollTo(id, anchor: .top)
+            } completion: {
+                placing = false
+            }
             return
         }
-        // One turn later, because `content` comes from a GeometryReader: on a
-        // count change it still holds the height from BEFORE the new row was laid
-        // out, and a stale height is the difference between "this all fits the
-        // screen, leave it alone" and "scroll". Measured: 1477 where the true
-        // height was 1290.
+        guard following, !dragging, !placing else { return }
+        // One turn later, because these values come from layout and this runs
+        // inside the change that produced them: on a text change they still
+        // describe the frame BEFORE that text was laid out. Measured: a stale
+        // content height read 1477 where the true one was 1290.
         DispatchQueue.main.async {
-            guard content > viewport + 1 else { return }
-            withAnimation(.linear(duration: 0.15)) { proxy.scrollTo("bottom", anchor: .bottom) }
+            guard following, !dragging, !placing else { return }
+            // On iOS 17 there is no geometry to consult: follow whenever there is
+            // more text than fits, which is the behaviour it has always had.
+            if canMeasure { guard !belowFold else { return } }
+            else { guard content > viewport + 1 else { return } }
+            // NOT animated: a stream sends text faster than a 0.15s animation
+            // completes, so every new word would restart an unfinished scroll and
+            // the transcript would trail behind in visible steps. An instant snap
+            // to the line that just arrived is what a chat stream wants.
+            proxy.scrollTo("bottom", anchor: .bottom)
         }
+    }
+
+    /// Does the OS report the transcript's scroll geometry - and therefore let
+    /// the follow be direction-aware? See TranscriptScroll. Without it (iOS 17,
+    /// or a build that cannot see the API) the blunter height test stands in,
+    /// which cannot tell "below the fold" from "above it".
+    private var canMeasure: Bool {
+        #if compiler(>=6.0)
+        if #available(iOS 18.0, *) { return true }
+        #endif
+        return false
     }
 
     // MARK: counters (one dim line, tap for the report)
@@ -860,8 +915,68 @@ struct ConnectBanner: View {
     }
 }
 
-// MARK: - Liquid Glass
+// MARK: - where the transcript sits
 
+/// Two facts about the transcript's own scroll, both straight from the OS.
+///
+/// `below`: is the newest line BELOW the fold? "Scroll to the bottom" is the
+/// wrong move when it is already on screen - that case is the live block
+/// shrinking, and pulling the chat there is the jump this design exists to
+/// prevent. So the direction of the fix depends on this.
+///
+/// `idle`: is the scroll at rest and did nobody touch it, or is it a gesture
+/// (or its momentum)? Only the reader may change whether the transcript follows:
+/// a scroll this view makes itself arrives as `.animating`, so it cannot be
+/// mistaken for the reader having taken over.
+///
+/// Both need iOS 18, and a lower deployment target cannot see the API at all
+/// (a missing symbol is a compile error even inside `#available`). There the
+/// caller falls back to comparing content height with the viewport -
+/// direction-blind, but still enough to keep a transcript that fits the screen
+/// from being nudged.
+private struct TranscriptScroll: ViewModifier {
+    /// Is the newest line below the fold? (called as the scroll moves)
+    let onBottom: (Bool) -> Void
+    /// (is the scroll at rest, did a READER's gesture bring it there?)
+    let onPhase: (Bool, Bool) -> Void
+
+    func body(content: Content) -> some View {
+        #if compiler(>=6.0)
+        if #available(iOS 18.0, *) {
+            content
+                .onScrollGeometryChange(for: Bool.self) { g in
+                    // No room for a scroll means the newest line is on screen
+                    // whatever the offset says - the state the app launches in.
+                    // 1pt of slack: a scroll at rest reports its offset a
+                    // fraction of a point short of the end.
+                    !(g.contentSize.height <= g.containerSize.height
+                      || g.contentOffset.y + g.containerSize.height >= g.contentSize.height - 1)
+                } action: { _, below in
+                    onBottom(below)
+                }
+                .onScrollPhaseChange { old, new in
+                    // The phases only a finger can produce. `.animating` is what a
+                    // programmatic scroll looks like until it settles, so it does
+                    // not count as the reader - which matters because the send
+                    // jump is exactly such a scroll, and it must not look like the
+                    // reader having taken over.
+                    func reader(_ p: ScrollPhase) -> Bool {
+                        p == .tracking || p == .interacting || p == .decelerating
+                    }
+                    // "at rest AND a reader" is only true on the transition OUT of
+                    // a reader phase.
+                    onPhase(new == .idle, new == .idle && reader(old))
+                }
+        } else {
+            content
+        }
+        #else
+        content
+        #endif
+    }
+}
+
+// MARK: - Liquid Glass
 /// The two bars on the scroll view's edges.
 ///
 /// `safeAreaBar` is iOS 26 only, and it is what puts a bar ON TOP of scrolling
