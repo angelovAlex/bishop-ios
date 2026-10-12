@@ -258,6 +258,11 @@ struct ChatView: View {
                 proxy.scrollTo(id, anchor: .top)
             } completion: {
                 placing = false
+                // The jump is done, so the ordinary rule applies again - and it
+                // has to be run here, because the send itself is not a trigger:
+                // until the first token arrives nothing else would pull a
+                // too-long transcript down to the newest line.
+                DispatchQueue.main.async { follow(proxy) }
             }
             return
         }
@@ -268,9 +273,12 @@ struct ChatView: View {
         // content height read 1477 where the true one was 1290.
         DispatchQueue.main.async {
             guard following, !dragging, !placing else { return }
-            // On iOS 17 there is no geometry to consult: follow whenever there is
-            // more text than fits, which is the behaviour it has always had.
-            if canMeasure { guard !belowFold else { return } }
+            // Also the direction test, and it reads the way it is written:
+            // belowFold true MEANS the newest line is under the bottom edge, so
+            // that is the case to fix. (Written the other way round once, as
+            // `guard !belowFold`, which scrolled only when there was nothing to
+            // scroll to and so never followed anything at all.)
+            if canMeasure { guard belowFold else { return } }
             else { guard content > viewport + 1 else { return } }
             // NOT animated: a stream sends text faster than a 0.15s animation
             // completes, so every new word would restart an unfinished scroll and
