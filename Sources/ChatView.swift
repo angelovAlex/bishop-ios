@@ -409,8 +409,9 @@ struct ChatView: View {
                     .padding(.vertical, 8)
                     .font(.system(size: 16, design: .monospaced))   // 16pt: iOS never zoom-scales
                     .focused($typing)
-                    .submitLabel(.send)          // labels that key "send"...
-                    .onSubmit { send() }         // ...and this is its iOS 18+ path
+                    // No submitLabel/onSubmit on purpose: the Return key must
+                    // insert a newline (multiline field, `axis: .vertical`),
+                    // and the round arrow on the right is what sends.
                 Button { api.busy ? stop() : send() } label: {
                     // One button, two jobs: a turn in flight turns it into the
                     // stop square, and pressing it ends the turn (the stream's
@@ -430,21 +431,9 @@ struct ChatView: View {
         }
         .padding(.bottom, 6)
         .onChange(of: picker) { _, items in Task { await addPhotos(items); picker = [] } }
-        // Return key = send, as asked - and this, not onSubmit, is what does it:
-        // a multiline (`axis: .vertical`) TextField INSERTS A NEWLINE on that key
-        // instead of submitting, verified on the simulator (the draft gained a
-        // line, onSubmit never ran, `submitLabel` still labelled the key "send").
-        // So the newline is caught here and eaten. A genuine multi-line message
-        // is pasted, not typed through the return key, and pasted line breaks do
-        // not end in one - the guard is on a TRAILING break, so they survive,
-        // while onSubmit above stays as the hook for an iOS that does submit.
-        .onChange(of: draft) { _, text in
-            guard text.hasSuffix("\n") else { return }
-            var body = text
-            while body.hasSuffix("\n") { body.removeLast() }
-            draft = body
-            send()
-        }
+        // Return key inserts a newline - the field is multiline and there is no
+        // submitLabel/onSubmit on it - so the round arrow button is the only way
+        // to send. Pasted multi-line text therefore survives intact.
     }
 
     // MARK: actions
