@@ -553,13 +553,24 @@ struct EventRow: View {
         case .thought:
             ThoughtBlock(text: event.text, secs: event.secs, running: event.open)
         case .tool:
-            // "> name {args}", one line, as the page shows it; the full call is
-            // one tap away, pretty-printed.
-            Collapsible(summary: "› \(event.name) \(event.text)".prefix(120).description,
-                        text: Self.prettyJSON(event.text) ?? event.text,
-                        mono: true, tint: .yellow)
+            if let v = event.view, v.kind == "edit" {
+                // The Mac decided this is a file edit, so draw it the way VS Code
+                // draws one: a chip with the file and its line counts, the
+                // changed lines under it. The full call stays one tap away.
+                EditChip(view: v, raw: event.text)
+            } else {
+                // "> name {args}", one line, as the page shows it; the full call is
+                // one tap away, pretty-printed.
+                Collapsible(summary: "› \(event.name) \(event.text)".prefix(120).description,
+                            text: Self.prettyJSON(event.text) ?? event.text,
+                            mono: true, tint: .yellow)
+            }
         case .detail:
-            Collapsible(summary: event.name, text: event.text, mono: true, tint: .gray)
+            // An edit whose chip is already above has said what happened; the
+            // quieter "checkmark file" was one more line saying it again. Any
+            // other tool result keeps its fold.
+            if let v = event.view, v.kind == "ok", v.ok { EmptyView() }
+            else { Collapsible(summary: event.name, text: event.text, mono: true, tint: .gray) }
         case .image:
             // Bound BOTH sides: a phone screenshot is 20:1 tall, so capping only
             // the height leaves a column of black stretching the whole row.
@@ -704,6 +715,82 @@ struct ThoughtBlock: View {
     }
 }
 
+
+/// A file edit, drawn the way VS Code writes it in a transcript: a chip naming
+/// the file with its line counts, and the changed lines under it. The chip alone
+/// is the row; a tap folds the diff away for a long turn that touched many files.
+struct EditChip: View {
+    let view: ToolView
+    let raw: String
+    @State private var open = true
+    @State private var showCall = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Text(view.subtitle.isEmpty ? "Edited" : view.subtitle)
+                    .foregroundStyle(Color(white: 0.62))
+                HStack(spacing: 5) {
+                    Image(systemName: "pencil.tip.crop.circle")
+                        .font(.system(size: 12, weight: .bold)).foregroundStyle(EditChip.blue)
+                    Text(view.title).foregroundStyle(Color(white: 0.92)).lineLimit(1)
+                    if view.added > 0 { Text("+\(view.added)").foregroundStyle(EditChip.green) }
+                    if view.removed > 0 { Text("-\(view.removed)").foregroundStyle(EditChip.red) }
+                }
+                .font(.system(size: 12.5, weight: .medium, design: .monospaced))
+                .padding(.horizontal, 9).padding(.vertical, 4)
+                .background(Color(white: 0.1))
+                .clipShape(RoundedRectangle(cornerRadius: 6))
+                .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Color(white: 0.2)))
+                .onTapGesture { withAnimation(.easeInOut(duration: 0.15)) { open.toggle() } }
+            }
+            if open, !view.rows.isEmpty {
+                // Scrolls sideways rather than wrapping: a wrapped line pushes
+                // its continuation under the +/- marker, and the marker is what
+                // the eye follows down the block.
+                ScrollView(.horizontal, showsIndicators: false) {
+                    VStack(spacing: 0) {
+                        ForEach(view.rows) { r in
+                            Text(r.tag == "gap" ? "" : Self.marked(r))
+                                .font(.system(size: 11, design: .monospaced))
+                                .foregroundStyle(r.tag == "eq" ? Color(white: 0.55) : EditChip.fg(r.tag))
+                                .lineLimit(1).fixedSize(horizontal: true, vertical: false)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.horizontal, 4).padding(.vertical, 0.5)
+                                .background(EditChip.bg(r.tag))
+                        }
+                    }
+                }
+                .clipShape(RoundedRectangle(cornerRadius: 6))
+                .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Color(white: 0.16)))
+                .onTapGesture { showCall.toggle() }   // a second tap shows how it was called
+                if showCall {
+                    Text(EventRow.prettyJSON(raw) ?? raw)
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundStyle(.gray).padding(.leading, 4)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// The +/- marker in place of a line-number column: the column is a fifth of a
+    /// phone's width, and the marker is what the eye actually follows.
+    private static func marked(_ r: ToolView.Row) -> String {
+        (r.tag == "add" ? "+ " : r.tag == "del" ? "- " : "  ") + r.text
+    }
+    private static let blue = Color(red: 0.35, green: 0.65, blue: 1.0)
+    private static let green = Color(red: 0.4, green: 0.85, blue: 0.5)
+    private static let red = Color(red: 1.0, green: 0.45, blue: 0.45)
+    private static func fg(_ tag: String) -> Color { tag == "add" ? green : tag == "del" ? red : .gray }
+    private static func bg(_ tag: String) -> Color {
+        switch tag {
+        case "add": return green.opacity(0.12)
+        case "del": return red.opacity(0.12)
+        default: return .clear
+        }
+    }
+}
 
 /// A tool call or its result: one dim line, the full text folded away.
 struct Collapsible: View {

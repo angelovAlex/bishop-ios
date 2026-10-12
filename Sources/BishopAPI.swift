@@ -36,6 +36,42 @@ struct ChatEvent: Identifiable {
     var watched = false         // a thought this app saw streaming, so its clock is its own
     var secs = 0                // how long it ran, once folded, and only when measured
     var started = Date()
+    var view: ToolView?         // how the Mac wants this tool row DRAWN, if it wants more than text
+}
+
+/// A tool call as a designed row rather than a line of JSON, decided on the Mac
+/// (see tools.tool_view) because only the Mac knows what the tool did - the app
+/// would otherwise have to diff two JSON strings to draw an edit. Unknown kinds
+/// fall through to the plain row, so a newer Mac cannot make the app show
+/// nothing.
+struct ToolView {
+    struct Row: Identifiable {
+        let id = UUID()
+        var tag: String         // eq, add, del, gap
+        var text: String
+    }
+    var kind = ""               // edit, ok
+    var subtitle = ""           // "Edited" / "Created"
+    var title = ""              // file name
+    var path = ""
+    var ok = true               // for kind == ok: did the tool succeed
+    var added = 0
+    var removed = 0
+    var rows: [Row] = []
+
+    init?(_ d: [String: Any]?) {
+        guard let d, let k = d["kind"] as? String, !k.isEmpty else { return nil }
+        kind = k
+        subtitle = d["subtitle"] as? String ?? ""
+        title = d["title"] as? String ?? ""
+        path = d["path"] as? String ?? ""
+        ok = d["ok"] as? Bool ?? true
+        added = d["added"] as? Int ?? 0
+        removed = d["removed"] as? Int ?? 0
+        rows = (d["rows"] as? [[String: Any]] ?? []).map {
+            Row(tag: $0["tag"] as? String ?? "eq", text: $0["t"] as? String ?? "")
+        }
+    }
 }
 
 struct SessionInfo: Identifiable, Hashable {
@@ -282,11 +318,13 @@ final class BishopAPI: ObservableObject {
                 // where tools arrive as "<name> {...}" lines of the answer text.
                 closeThought(); closeAnswer()
                 out.append(ChatEvent(kind: .tool, text: e["arguments"] as? String ?? "",
-                                     name: e["name"] as? String ?? "tool"))
+                                     name: e["name"] as? String ?? "tool",
+                                     view: ToolView(e["view"] as? [String: Any])))
             case "tool_result":
                 let body = (e["result"] as? String) ?? ""
                 closeThought(); closeAnswer()
-                out.append(ChatEvent(kind: .detail, text: body, name: "result"))
+                out.append(ChatEvent(kind: .detail, text: body, name: "result",
+                                     view: ToolView(e["view"] as? [String: Any])))
             case "image":
                 out.append(ChatEvent(kind: .image, name: e["title"] as? String ?? "",
                                      imagePath: e["path"] as? String ?? ""))
