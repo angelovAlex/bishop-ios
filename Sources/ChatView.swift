@@ -670,8 +670,9 @@ struct EventRow: View {
             // One row per call: the call is the summary, the result is inside the
             // fold. An EDIT is drawn the way VS Code draws one and a READ of a
             // file wears the SAME chip - the file with its blue glyph and,
-            // for a read, the lines it covered - so both open on arrival (the
-            // content is the point) and a tap folds them away; the full call
+            // for a read, the lines it covered. The edit opens on arrival (the
+            // diff is the point and is written down nowhere else); the read is
+            // born folded, so a whole file stays one tap away. The full call
             // stays one tap further in.
             if let v = event.view, ToolView.describes(v) {
                 EditChip(view: v, raw: event.text, result: event.ok == false ? event.result : "",
@@ -919,10 +920,15 @@ struct EditChip: View {
     let raw: String
     var result = ""                     // a failure's own words, if it had any
     var ok: Bool? = nil                 // nil until the result arrived
-    @State private var open = true
+    /// nil until the user taps: a READ is born folded, an EDIT (a diff, and the
+    /// only place those lines are written down) is born open. Alex asked for the
+    /// read to stop dumping a whole file into the transcript on arrival.
+    @State private var tapped: Bool? = nil
     @State private var showCall = false
 
     private var read: Bool { view.kind == "read" }
+    private var open: Bool { tapped ?? !read }
+    private func toggle() { withAnimation(.easeInOut(duration: 0.15)) { tapped = !open } }
     /// A read carries the span it covered; an edit's counts are already in the
     /// chip, so it says nothing out here.
     private var span: String {
@@ -973,7 +979,7 @@ struct EditChip: View {
                     .background(Color(white: 0.1))
                     .clipShape(RoundedRectangle(cornerRadius: 6))
                     .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Color(white: 0.2)))
-                    .onTapGesture { withAnimation(.easeInOut(duration: 0.15)) { open.toggle() } }
+                    .onTapGesture { toggle() }
                     if !span.isEmpty {
                         Text(span).font(.system(size: 12)).foregroundStyle(Color(white: 0.42))
                     }
