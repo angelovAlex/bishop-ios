@@ -56,14 +56,45 @@ struct ToolView {
         var tag: String         // eq, add, del, gap
         var text: String
     }
-    var kind = ""               // edit, ok
-    var subtitle = ""           // "Edited" / "Created"
+    var kind = ""               // edit, read, ok
+    var subtitle = ""           // "Edited" / "Created" / "Read"
     var title = ""              // file name
     var path = ""
     var ok = true               // for kind == ok: did the tool succeed
     var added = 0
     var removed = 0
+    var lang = ""               // the chip's language badge, "ts" for x.ts
+    var span = ""               // what a read covered: "lines 1 to 19"
     var rows: [Row] = []
+
+    /// Does this view DESCRIBE the row, rather than just report on it? A call's
+    /// view describes (an edit's chip and diff, a read's file); a result's only
+    /// reports ("ok", true). A result must never take a description's place - the
+    /// chip and the diff would vanish the moment the tool answered, which is
+    /// exactly how the edit chip once disappeared.
+    static func describes(_ v: ToolView?) -> Bool {
+        v?.kind == "edit" || v?.kind == "read"
+    }
+
+    /// The row's view once a result has arrived: the result's own when it carries
+    /// one. A READ is the case this exists for - nothing is known about the file
+    /// at call time, so the RESULT's view is the one with the lines, the span and,
+    /// on a failure, the reason; keeping the call's view would leave a read chip
+    /// with no content and no cross. An edit is the other way round (its diff is
+    /// in the CALL's view, its result only reports "ok"), and a plain row draws
+    /// the result's line anyway - so both of those answer with the view the row
+    /// already had, which is what the caller passes as `call`.
+    static func describedBy(_ call: ToolView?, _ result: ToolView?) -> ToolView? {
+        (result?.kind == "read" ? result : nil) ?? call
+    }
+
+    /// Does the row already say what the result would say? Then the result's own
+    /// text is dropped: for a good edit or read the chip carries it, and the
+    /// text is the whole file. A FAILED one is the only place the reason exists,
+    /// so it is never dropped - the caller asks only when `good`.
+    static func speaksForItself(_ v: ToolView?) -> Bool {
+        describes(v) || v?.kind == "ok"
+    }
 
     init?(_ d: [String: Any]?) {
         guard let d, let k = d["kind"] as? String, !k.isEmpty else { return nil }
@@ -74,6 +105,8 @@ struct ToolView {
         ok = d["ok"] as? Bool ?? true
         added = d["added"] as? Int ?? 0
         removed = d["removed"] as? Int ?? 0
+        lang = d["lang"] as? String ?? ""
+        span = d["span"] as? String ?? ""
         rows = (d["rows"] as? [[String: Any]] ?? []).map {
             Row(tag: $0["tag"] as? String ?? "eq", text: $0["t"] as? String ?? "")
         }
@@ -362,10 +395,12 @@ final class BishopAPI: ObservableObject {
                     // is noise; a FAILED one is the only place that says why and
                     // must never be swallowed.
                     out[i].ok = good
-                    out[i].result = good && view?.kind == "ok" ? "" : body
+                    out[i].result = good && ToolView.speaksForItself(view) ? "" : body
                     // A result's view REPORTS ("ok", true); the call's view
-                    // DESCRIBES (an edit's chip and diff). Keep the description.
-                    if let v = view, out[i].view?.kind != "edit" { out[i].view = v }
+                    // DESCRIBES (an edit's chip and diff). describedBy keeps the
+                    // description - except for a read, whose content only ever
+                    // exists in the result.
+                    out[i].view = ToolView.describedBy(out[i].view, view)
                 } else {
                     out.append(ChatEvent(kind: .result, text: body, name: "result", view: view))
                 }

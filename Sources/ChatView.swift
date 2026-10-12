@@ -571,10 +571,11 @@ struct ChatView: View {
             events[i].ok = good
             // A good edit said what happened in its chip; a failure says it here
             // and nowhere else, so it is kept whatever the view claims.
-            events[i].result = good && row.view?.kind == "ok" ? "" : row.text
+            events[i].result = good && ToolView.speaksForItself(row.view) ? "" : row.text
             // The call's view DESCRIBES the row (an edit's chip and diff), the
-            // result's only reports ("ok", true): never overwrite the former.
-            if let v = row.view, events[i].view?.kind != "edit" { events[i].view = v }
+            // result's only reports ("ok", true): never overwrite the former -
+            // except for a read, whose content only exists in the result.
+            events[i].view = ToolView.describedBy(events[i].view, row.view)
         default:
             closePhase()
             events.append(row)
@@ -678,11 +679,12 @@ struct EventRow: View {
             ThoughtBlock(text: event.text, secs: event.secs, running: event.open)
         case .tool:
             // One row per call: the call is the summary, the result is inside the
-            // fold. An edit is drawn the way VS Code draws one - a chip with the
-            // file and its line counts - and the changed lines are its fold, so
-            // the chip opens on arrival (the diff is the point) and a tap folds
-            // it away; its full call stays one tap further in.
-            if let v = event.view, v.kind == "edit" {
+            // fold. An EDIT is drawn the way VS Code draws one and a READ of a
+            // file wears the SAME chip - the file with its language badge and,
+            // for a read, the lines it covered - so both open on arrival (the
+            // content is the point) and a tap folds them away; the full call
+            // stays one tap further in.
+            if let v = event.view, ToolView.describes(v) {
                 EditChip(view: v, raw: event.text, result: event.ok == false ? event.result : "",
                          ok: event.ok)
             } else {
@@ -691,7 +693,9 @@ struct EventRow: View {
         case .result:
             // A tool result with no call above it to join. Folded, as before.
             if let v = event.view, v.kind == "ok", v.ok { EmptyView() }
-            else { Collapsible(summary: event.name, text: event.text, mono: true, tint: .gray) }
+            else if let v = event.view, ToolView.describes(v) {
+                EditChip(view: v, raw: "", result: event.ok == false ? event.text : "")
+            } else { Collapsible(summary: event.name, text: event.text, mono: true, tint: .gray) }
         case .image:
             // Bound BOTH sides: a phone screenshot is 20:1 tall, so capping only
             // the height leaves a column of black stretching the whole row.
@@ -916,9 +920,11 @@ struct ThoughtBlock: View {
 }
 
 
-/// A file edit, drawn the way VS Code writes it in a transcript: a chip naming
-/// the file with its line counts, and the changed lines under it. The chip alone
-/// is the row; a tap folds the diff away for a long turn that touched many files.
+/// A file edit or a file read, drawn the way VS Code writes it in a transcript:
+/// the file in a chip - language badge, name, what this call did to it - and the
+/// content under it. A read says ", lines 1 to 19" after the chip, an edit says
+/// nothing there because its counts are inside it. Both kinds are this one body,
+/// because one view means one place to fix.
 struct EditChip: View {
     let view: ToolView
     let raw: String
@@ -927,58 +933,86 @@ struct EditChip: View {
     @State private var open = true
     @State private var showCall = false
 
+    private var read: Bool { view.kind == "read" }
+    /// A read carries the span it covered; an edit's counts are already in the
+    /// chip, so it says nothing out here.
+    private var span: String {
+        read && !view.span.isEmpty ? ", \(view.span)" : ""
+    }
+    /// An edit counts +/-; a read's chip holds only the file, so a read of ONE
+    /// line needs its span to say anything at all.
+    private var counts: Text? {
+        if read { return nil }
+        guard view.added > 0 || view.removed > 0 else { return nil }
+        let plus = view.added > 0 ? "+\(view.added)" : ""
+        let minus = view.removed > 0 ? "-\(view.removed)" : ""
+        return Text(plus + (view.added > 0 && view.removed > 0 ? " " : "") + minus)
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 6) {
-                Text(view.subtitle.isEmpty ? "Edited" : view.subtitle)
-                    .foregroundStyle(Color(white: 0.62))
-                HStack(spacing: 5) {
-                    Image(systemName: "pencil.tip.crop.circle")
-                        .font(.system(size: 12, weight: .bold)).foregroundStyle(EditChip.blue)
-                    Text(view.title).foregroundStyle(Color(white: 0.92)).lineLimit(1)
-                    if view.added > 0 { Text("+\(view.added)").foregroundStyle(EditChip.green) }
-                    if view.removed > 0 { Text("-\(view.removed)").foregroundStyle(EditChip.red) }
-                }
-                .font(.system(size: 12.5, weight: .medium, design: .monospaced))
-                .padding(.horizontal, 9).padding(.vertical, 4)
-                .background(Color(white: 0.1))
-                .clipShape(RoundedRectangle(cornerRadius: 6))
-                .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Color(white: 0.2)))
-                .onTapGesture { withAnimation(.easeInOut(duration: 0.15)) { open.toggle() } }
+                // The tick leads, the way the reference draws it: tick, label,
+                // then the file. A chip starts with its tick already in place
+                // (the row appears after the tool ran or is replaying a finished
+                // turn), and mark() rewrites it if the result says otherwise.
                 if let ok {
                     Text(ok ? "\u{2713}" : "\u{2717}")
                         .font(.system(size: 12, weight: .bold))
                         .foregroundStyle(ok ? EditChip.green : EditChip.red)
                 }
-            }
-            if open, !view.rows.isEmpty {
-                // Scrolls sideways rather than wrapping: a wrapped line pushes
-                // its continuation under the +/- marker, and the marker is what
-                // the eye follows down the block.
-                ScrollView(.horizontal, showsIndicators: false) {
-                    VStack(spacing: 0) {
-                        ForEach(view.rows) { r in
-                            Text(r.tag == "gap" ? "" : Self.marked(r))
-                                .font(.system(size: 11, design: .monospaced))
-                                .foregroundStyle(r.tag == "eq" ? Color(white: 0.55) : EditChip.fg(r.tag))
-                                .lineLimit(1).fixedSize(horizontal: true, vertical: false)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .padding(.horizontal, 4).padding(.vertical, 0.5)
-                                .background(EditChip.bg(r.tag))
-                        }
+                Text(view.subtitle.isEmpty ? (read ? "Read" : "Edited") : view.subtitle)
+                    .foregroundStyle(Color(white: 0.62))
+                // The box and the span are ONE group, so the ", lines 1 to 19"
+                // hugs the box instead of floating a stack-spacing away from it.
+                HStack(spacing: 0) {
+                    HStack(spacing: 5) {
+                        Text(view.lang.uppercased())
+                            .font(.system(size: 10, weight: .bold)).foregroundStyle(EditChip.blue)
+                        Text(view.title).foregroundStyle(Color(white: 0.92)).lineLimit(1)
+                        counts
+                    }
+                    .font(.system(size: 12.5, weight: .medium, design: .monospaced))
+                    .padding(.horizontal, 9).padding(.vertical, 4)
+                    .background(Color(white: 0.1))
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                    .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Color(white: 0.2)))
+                    .onTapGesture { withAnimation(.easeInOut(duration: 0.15)) { open.toggle() } }
+                    if !span.isEmpty {
+                        Text(span).font(.system(size: 12)).foregroundStyle(Color(white: 0.42))
                     }
                 }
-                .clipShape(RoundedRectangle(cornerRadius: 6))
-                .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Color(white: 0.16)))
-                .onTapGesture { showCall.toggle() }   // a second tap shows how it was called
-                if showCall {
-                    Text(EventRow.prettyJSON(raw) ?? raw)
-                        .font(.system(size: 10, design: .monospaced))
-                        .foregroundStyle(.gray).padding(.leading, 4)
+            }
+            if open, !view.rows.isEmpty || !result.isEmpty {
+                if !view.rows.isEmpty {
+                    // Scrolls sideways rather than wrapping: a wrapped line pushes
+                    // its continuation under the +/- marker, and the marker is what
+                    // the eye follows down the block.
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        VStack(spacing: 0) {
+                            ForEach(view.rows) { r in
+                                Text(r.tag == "gap" ? "" : Self.marked(r))
+                                    .font(.system(size: 11, design: .monospaced))
+                                    .foregroundStyle(r.tag == "eq" ? Color(white: 0.55) : EditChip.fg(r.tag))
+                                    .lineLimit(1).fixedSize(horizontal: true, vertical: false)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .padding(.horizontal, 4).padding(.vertical, 0.5)
+                                    .background(EditChip.bg(r.tag))
+                            }
+                        }
+                    }
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                    .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Color(white: 0.16)))
+                    .onTapGesture { showCall.toggle() }   // a second tap shows how it was called
+                    if showCall {
+                        Text(EventRow.prettyJSON(raw) ?? raw)
+                            .font(.system(size: 10, design: .monospaced))
+                            .foregroundStyle(.gray).padding(.leading, 4)
+                    }
                 }
-                // An edit that FAILED has one thing to say that the chip cannot:
-                // the tool's own message ("old_text not found in X"). It goes in
-                // the fold, under the diff, and never gets folded away by us.
+                // A FAILED edit or read has one thing to say that the chip cannot:
+                // the tool's own message ("old_text not found in X", "no such
+                // file"). It goes in the fold and is never folded away by us.
                 if !result.isEmpty {
                     Text(result).font(.system(size: 11, design: .monospaced))
                         .foregroundStyle(EditChip.red.opacity(0.9))
