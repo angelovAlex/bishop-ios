@@ -56,35 +56,37 @@ struct ToolView {
         var tag: String         // eq, add, del, gap
         var text: String
     }
-    var kind = ""               // edit, read, ok
-    var subtitle = ""           // "Edited" / "Created" / "Read"
-    var title = ""              // file name
+    var kind = ""               // edit, read, search, ok
+    var subtitle = ""           // "Edited" / "Created" / "Read" / "Found"
+    var title = ""              // file name, or "needle in folder" for a search
     var path = ""
     var ok = true               // for kind == ok: did the tool succeed
     var added = 0
     var removed = 0
-    var span = ""               // what a read covered: "lines 1 to 19"
+    var span = ""               // what a read covered ("lines 1 to 19"), a search's "2 files"
+    var note = ""               // what a search did NOT cover: "hidden folders skipped"
     var rows: [Row] = []
 
     /// Does this view DESCRIBE the row, rather than just report on it? A call's
-    /// view describes (an edit's chip and diff, a read's file); a result's only
-    /// reports ("ok", true). A result must never take a description's place - the
-    /// chip and the diff would vanish the moment the tool answered, which is
-    /// exactly how the edit chip once disappeared.
+    /// view describes (an edit's chip and diff, a read's file, a search's hits);
+    /// a result's only reports ("ok", true). A result must never take a
+    /// description's place - the chip and the diff would vanish the moment the
+    /// tool answered, which is exactly how the edit chip once disappeared.
     static func describes(_ v: ToolView?) -> Bool {
-        v?.kind == "edit" || v?.kind == "read"
+        v?.kind == "edit" || v?.kind == "read" || v?.kind == "search"
     }
 
     /// The row's view once a result has arrived: the result's own when it carries
     /// one. A READ is the case this exists for - nothing is known about the file
     /// at call time, so the RESULT's view is the one with the lines, the span and,
     /// on a failure, the reason; keeping the call's view would leave a read chip
-    /// with no content and no cross. An edit is the other way round (its diff is
-    /// in the CALL's view, its result only reports "ok"), and a plain row draws
-    /// the result's line anyway - so both of those answer with the view the row
-    /// already had, which is what the caller passes as `call`.
+    /// with no content and no cross. A SEARCH is the same case, and for the same
+    /// reason: what was found is only known once it has run. An edit is the other
+    /// way round (its diff is in the CALL's view, its result only reports "ok"),
+    /// and a plain row draws the result's line anyway - so both of those answer
+    /// with the view the row already had, which is what the caller passes as `call`.
     static func describedBy(_ call: ToolView?, _ result: ToolView?) -> ToolView? {
-        (result?.kind == "read" ? result : nil) ?? call
+        (result?.kind == "read" || result?.kind == "search" ? result : nil) ?? call
     }
 
     /// Does the row already say what the result would say? Then the result's own
@@ -105,6 +107,7 @@ struct ToolView {
         added = d["added"] as? Int ?? 0
         removed = d["removed"] as? Int ?? 0
         span = d["span"] as? String ?? ""
+        note = d["note"] as? String ?? ""
         rows = (d["rows"] as? [[String: Any]] ?? []).map {
             Row(tag: $0["tag"] as? String ?? "eq", text: $0["t"] as? String ?? "")
         }

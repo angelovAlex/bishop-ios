@@ -668,12 +668,13 @@ struct EventRow: View {
             ThoughtBlock(text: event.text, secs: event.secs, running: event.open)
         case .tool:
             // One row per call: the call is the summary, the result is inside the
-            // fold. An EDIT is drawn the way VS Code draws one and a READ of a
-            // file wears the SAME chip - the file with its blue glyph and,
-            // for a read, the lines it covered. The edit opens on arrival (the
-            // diff is the point and is written down nowhere else); the read is
-            // born folded, so a whole file stays one tap away. The full call
-            // stays one tap further in.
+            // fold. An EDIT is drawn the way VS Code draws one, and a READ of a
+            // file and a SEARCH of the tree wear the SAME chip - the thing with
+            // its blue glyph (a file, a magnifier) and, for a read, the lines it
+            // covered, for a search, how much it found. The edit opens on arrival
+            // (the diff is the point and is written down nowhere else); the read
+            // and the search are born folded, so a whole file - or 300 hits -
+            // stays one tap away. The full call stays one tap further in.
             if let v = event.view, ToolView.describes(v) {
                 EditChip(view: v, raw: event.text, result: event.ok == false ? event.result : "",
                          ok: event.ok)
@@ -910,34 +911,37 @@ struct ThoughtBlock: View {
 }
 
 
-/// A file edit or a file read, drawn the way VS Code writes it in a transcript:
-/// the file in a chip - its glyph in blue, its name, what this call did to it -
-/// and the content under it. A read says ", lines 1 to 19" after the chip, an edit
-/// says nothing there because its counts are inside it. Both kinds are this one
-/// body, because one view means one place to fix.
+/// A file edit, a file read or a search, drawn the way VS Code writes it in a
+/// transcript: the thing in a chip - its glyph in blue, its name, what this call
+/// did to it - and the content under it. A read says ", lines 1 to 19" after the
+/// chip, a search ", 2 files", an edit says nothing there because its counts are
+/// inside it. All three kinds are this one body, because one view means one
+/// place to fix.
 struct EditChip: View {
     let view: ToolView
     let raw: String
     var result = ""                     // a failure's own words, if it had any
     var ok: Bool? = nil                 // nil until the result arrived
-    /// nil until the user taps: a READ is born folded, an EDIT (a diff, and the
-    /// only place those lines are written down) is born open. Alex asked for the
-    /// read to stop dumping a whole file into the transcript on arrival.
+    /// nil until the user taps: a READ and a SEARCH are born folded, an EDIT (a
+    /// diff, and the only place those lines are written down) is born open. Alex
+    /// asked for the read to stop dumping a whole file into the transcript on
+    /// arrival - and a search is the same case, at 300 hits.
     @State private var tapped: Bool? = nil
     @State private var showCall = false
 
     private var read: Bool { view.kind == "read" }
-    private var open: Bool { tapped ?? !read }
+    private var search: Bool { view.kind == "search" }
+    private var open: Bool { tapped ?? !(read || search) }
     private func toggle() { withAnimation(.easeInOut(duration: 0.15)) { tapped = !open } }
-    /// A read carries the span it covered; an edit's counts are already in the
-    /// chip, so it says nothing out here.
+    /// A read carries the span of lines it covered, a search how much it found;
+    /// an edit's counts are already in the chip, so it says nothing out here.
     private var span: String {
-        read && !view.span.isEmpty ? ", \(view.span)" : ""
+        (read || search) && !view.span.isEmpty ? ", \(view.span)" : ""
     }
-    /// An edit counts +/- in green and red; a read's chip holds only the file, so a
-    /// read of ONE line needs its span out there to say anything at all.
+    /// An edit counts +/- in green and red; a read's or a search's chip holds only
+    /// the name, so a read of ONE line needs its span out there to say anything.
     private var counts: Text? {
-        if read { return nil }
+        if read || search { return nil }
         guard view.added > 0 || view.removed > 0 else { return nil }
         let plus = view.added > 0 ? Text("+\(view.added)").foregroundStyle(EditChip.green)
                                   : Text("")
@@ -959,17 +963,21 @@ struct EditChip: View {
                         .font(.system(size: 12, weight: .bold))
                         .foregroundStyle(ok ? EditChip.green : EditChip.red)
                 }
-                Text(view.subtitle.isEmpty ? (read ? "Read" : "Edited") : view.subtitle)
+                Text(view.subtitle.isEmpty ? (read ? "Read" : search ? "Found" : "Edited")
+                                           : view.subtitle)
                     .foregroundStyle(Color(white: 0.62))
                 // The box and the span are ONE group, so the ", lines 1 to 19"
                 // hugs the box instead of floating a stack-spacing away from it.
                 HStack(spacing: 0) {
                     HStack(spacing: 5) {
-                        // The file's glyph in its blue: a pencil for an edit, a
-                        // FILE for a read - which is what says "this was read,
-                        // not changed" at a glance. It was briefly a language
-                        // badge (TS, PY) and Alex asked for the glyph back.
-                        Image(systemName: read ? "doc.text" : "pencil.tip.crop.circle")
+                        // The glyph in its blue: a pencil for an edit, a FILE for
+                        // a read - which is what says "this was read, not
+                        // changed" at a glance - and a MAGNIFIER for a search,
+                        // which looked instead of finding what it named. It was
+                        // briefly a language badge (TS, PY) and Alex asked for
+                        // the glyph back.
+                        Image(systemName: search ? "magnifyingglass"
+                                                 : read ? "doc.text" : "pencil.tip.crop.circle")
                             .font(.system(size: 12, weight: .bold)).foregroundStyle(EditChip.blue)
                         Text(view.title).foregroundStyle(Color(white: 0.92)).lineLimit(1)
                         counts
@@ -984,6 +992,14 @@ struct EditChip: View {
                         Text(span).font(.system(size: 12)).foregroundStyle(Color(white: 0.42))
                     }
                 }
+            }
+            // What a search did NOT cover ("hidden folders skipped; result limit
+            // reached"). It is outside the fold on purpose: a list that stopped
+            // early reads as the whole tree unless this is in sight, and the fold
+            // is exactly where a reader would not look. Only a search has one.
+            if !view.note.isEmpty {
+                Text(view.note).font(.system(size: 10.5))
+                    .foregroundStyle(Color(white: 0.45))
             }
             if open, !view.rows.isEmpty || !result.isEmpty {
                 if !view.rows.isEmpty {
@@ -1026,14 +1042,18 @@ struct EditChip: View {
     }
 
     /// The +/- marker in place of a line-number column: the column is a fifth of a
-    /// phone's width, and the marker is what the eye actually follows.
+    /// phone's width, and the marker is what the eye actually follows. A search
+    /// hit is neither added nor removed, so it carries no marker at all.
     private static func marked(_ r: ToolView.Row) -> String {
-        (r.tag == "add" ? "+ " : r.tag == "del" ? "- " : "  ") + r.text
+        r.tag == "hit" ? r.text : (r.tag == "add" ? "+ " : r.tag == "del" ? "- " : "  ") + r.text
     }
     private static let blue = Color(red: 0.35, green: 0.65, blue: 1.0)
     private static let green = Color(red: 0.4, green: 0.85, blue: 0.5)
     private static let red = Color(red: 1.0, green: 0.45, blue: 0.45)
-    private static func fg(_ tag: String) -> Color { tag == "add" ? green : tag == "del" ? red : .gray }
+    private static func fg(_ tag: String) -> Color {
+        // A hit is the whole point of its row, so it is the brightest thing in it.
+        tag == "hit" ? Color(white: 0.72) : tag == "add" ? green : tag == "del" ? red : .gray
+    }
     private static func bg(_ tag: String) -> Color {
         switch tag {
         case "add": return green.opacity(0.12)
