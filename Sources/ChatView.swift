@@ -335,11 +335,13 @@ struct ChatView: View {
     /// Two lines, the last turn and the whole session, unlabelled in the same
     /// `in / c / bill / out / cost` shape - Alex's wording: "Don't write 'last'
     /// and 'session'. 'cache' change to 'c'". They are told apart by weight
-    /// instead: the last turn is the live one, so it keeps full contrast while
-    /// the session line below it is dimmed. `in` is the PROMPT at its true size
-    /// (bill + c), which is also the context in play for the last turn; `bill`
-    /// is the only part that costs money. Calls and the lifetime total live in
-    /// the fold.
+    /// instead: the SESSION line is the brighter one - Alex asked for the swap
+    /// ("Swap colors of current turn statistics line and current session
+    /// statistics"), so the running total now carries full contrast and the last
+    /// turn, read as a detail of it, sits dimmed below. `in` is the PROMPT at its
+    /// true size (bill + c), which is also the context in play for the last turn;
+    /// `bill` is the only part that costs money. Calls and the lifetime total
+    /// live in the fold.
     ///
     /// The pair used to be `in 75k cache 1.56m`, which Alex rightly reported as
     /// impossible ("How can it be that cache is 1.56m?"): `in` was the BILLED
@@ -352,8 +354,8 @@ struct ChatView: View {
                     HStack(spacing: 8) {
                         VStack(alignment: .leading, spacing: 1) {
                             Text(counters(u.lastInput, u.lastCached, u.lastBilled, u.lastOutput, u.lastCost))
-                            Text(counters(u.grossInput, u.cached, u.billedInput, u.output, u.sessionCost))
                                 .foregroundStyle(.gray.opacity(0.55))
+                            Text(counters(u.grossInput, u.cached, u.billedInput, u.output, u.sessionCost))
                         }
                         Spacer()
                         Image(systemName: showStats ? "chevron.up" : "chevron.right").font(.caption2)
