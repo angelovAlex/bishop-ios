@@ -503,7 +503,11 @@ struct ChatView: View {
                 }
             }
             .padding(8)
-            .glassBar(glassBar, radius: 26, fallback: Color(white: 0.11))
+            // The reference bar is near-black (RGB 2,2,2) while the plain
+            // material over this black page reads grey (18,18,18), so the
+            // composer asks for a black tint - the one lever that darkens
+            // liquid glass without painting over it.
+            .glassBar(glassBar, radius: 26, fallback: Color(white: 0.11), tint: .black)
             // 4, not 10: the pill now stretches nearly the whole width, which is
             // the room that went to waste beside it. Two points are kept so the
             // glass's rounded edge and the screen's edge do not read as one line.
@@ -1497,25 +1501,33 @@ extension View {
     /// The surface of a bar or the composer, on the view's whole frame including
     /// its padding - so pad first and call this last. A flat fill before iOS 26,
     /// Liquid Glass on it.
-    func glassBar(_ glass: Bool, radius: CGFloat, fallback: Color) -> some View {
+    func glassBar(_ glass: Bool, radius: CGFloat, fallback: Color, tint: Color? = nil) -> some View {
         let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
         return self
             // Under glass the fill has to go: the material is translucent, so a
             // dark slab behind it just greys it out.
             .background(glass ? Color.clear : fallback)
             .clipShape(shape)
-            .modifier(GlassOn(glass: glass, shape: shape))
+            .modifier(GlassOn(glass: glass, shape: shape, tint: tint))
     }
 }
 
 private struct GlassOn: ViewModifier {
     let glass: Bool
     let shape: RoundedRectangle
+    /// A colour blended INTO the material, not painted over it: `Glass.tint` is
+    /// the one lever that darkens liquid glass, and nil is the plain material.
+    /// Alex on the composer: "input field is greyish color, while on reference
+    /// picture it is more dark" - the reference bar measures RGB 2,2,2 while the
+    /// untinted material over this black page measured 18,18,18, so the glass
+    /// itself is the pale veil. The composer therefore asks for a black tint; the
+    /// header bars, signed off as they are, keep the plain material.
+    var tint: Color?
 
     func body(content: Content) -> some View {
         #if compiler(>=6.2)
         if glass, #available(iOS 26.0, *) {
-            content.glassEffect(.regular, in: shape)
+            content.glassEffect(.regular.tint(tint), in: shape)
         } else {
             content
         }
