@@ -193,11 +193,12 @@ struct ChatView: View {
                     Color.clear.frame(height: 1).id("bottom")
                 }
                 // No horizontal padding: the transcript runs edge to edge
-                // (Alex's ask), because every row that needs a margin already
-                // carries its own - a bubble and the user's picture right-align
-                // at 14/0, a tool chip leads at the container's 0, and the
-                // thought's grey rule is drawn AT the left edge, which is the
-                // one place an inset would show as a stripe of nothing.
+                // (Alex's ask), because the rows that need a margin carry it
+                // themselves - both SPEAKERS are inset on their own side, 14pt
+                // each, so a bubble reads as the user's and an answer as
+                // Bishop's, while a tool chip, a diff and the thought's grey
+                // rule (drawn AT the left edge, the one place an inset shows as
+                // a stripe of nothing) keep the full width.
                 .padding(.horizontal, 0).padding(.top, 8)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(GeometryReader { g in
@@ -709,7 +710,17 @@ struct EventRow: View {
     var body: some View {
         switch event.kind {
         case .user:
-            VStack(alignment: .trailing, spacing: 6) {
+            // Alex: "for my bubbles keep padding at left so we see that it is
+            // from my side". So the two SPEAKERS are inset on their OWN side and
+            // nothing else is: the bubble 14 from the left, the answer 14 from
+            // the right, and the two mirror each other - one number, read twice,
+            // which is what makes a row tell you who said it without a label.
+            // The transcript container stays at 0 behind them, so a tool chip or
+            // a diff - Bishop's working, not his voice - still runs the full
+            // width, and the bubble's own 14pt right padding is gone (the
+            // speaker's margin is now outside the bubble, where it can be read
+            // as one).
+            VStack(alignment: .leading, spacing: 6) {
                 if !event.text.isEmpty {
                     Text(event.text).font(.system(size: 15, design: .monospaced))
                         .padding(.horizontal, 14).padding(.vertical, 9)
@@ -721,10 +732,12 @@ struct EventRow: View {
                         .frame(height: 90).frame(maxWidth: 160).clipShape(RoundedRectangle(cornerRadius: 12))
                 }
             }
-            .frame(maxWidth: .infinity, alignment: .trailing)
+            .padding(.leading, 14)
+            .frame(maxWidth: .infinity, alignment: .leading)
         case .answer:
             Text(event.text).font(.system(size: 15, design: .monospaced))
                 .textSelection(.enabled)
+                .padding(.trailing, 14)
                 .frame(maxWidth: .infinity, alignment: .leading)
         case .thought:
             ThoughtBlock(text: event.text, secs: event.secs, running: event.open)
