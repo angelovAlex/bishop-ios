@@ -711,16 +711,20 @@ struct EventRow: View {
         switch event.kind {
         case .user:
             // Alex: "for my bubbles keep padding at left so we see that it is
-            // from my side". So the two SPEAKERS are inset on their OWN side and
-            // nothing else is: the bubble 14 from the left, the answer 14 from
-            // the right, and the two mirror each other - one number, read twice,
-            // which is what makes a row tell you who said it without a label.
-            // The transcript container stays at 0 behind them, so a tool chip or
-            // a diff - Bishop's working, not his voice - still runs the full
-            // width, and the bubble's own 14pt right padding is gone (the
-            // speaker's margin is now outside the bubble, where it can be read
-            // as one).
-            VStack(alignment: .leading, spacing: 6) {
+            // from my side". Then, on the first attempt: "my bubble now is in
+            // the middle because you made padding from both sides". Both are
+            // right, and the middle is what a LEADING-aligned full-width bubble
+            // looks like: its text is long enough to fill the row, so it ends up
+            // with a gap on each side and belongs to nobody.
+            //
+            // So the row keeps the side it always had - TRAILING - and the 14pt
+            // at the leading edge is a CAP, not an alignment: a short "ok" still
+            // hugs the right edge, a long paragraph stops 14pt short of the left
+            // one. The two speakers are still inset from each other's side only
+            // (the answer takes 14 at the trailing edge, see below), which is
+            // what says who is talking; the bubble's own 14 inner padding is what
+            // keeps its text off the screen's right edge.
+            VStack(alignment: .trailing, spacing: 6) {
                 if !event.text.isEmpty {
                     Text(event.text).font(.system(size: 15, design: .monospaced))
                         .padding(.horizontal, 14).padding(.vertical, 9)
@@ -732,8 +736,8 @@ struct EventRow: View {
                         .frame(height: 90).frame(maxWidth: 160).clipShape(RoundedRectangle(cornerRadius: 12))
                 }
             }
+            .frame(maxWidth: .infinity, alignment: .trailing)
             .padding(.leading, 14)
-            .frame(maxWidth: .infinity, alignment: .leading)
         case .answer:
             Text(event.text).font(.system(size: 15, design: .monospaced))
                 .textSelection(.enabled)
