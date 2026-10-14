@@ -140,17 +140,10 @@ struct UsageStats {
     var lastCost = ""
     var totalCost = ""
 
-    /// The last call's prompt, split the way the fold prints it: the provider
-    /// reports the PROMPT as one number that already contains the cache hits, so
-    /// the billed part has to be taken back out of it.
+    /// The last call's billed prompt: the provider reports the PROMPT as one
+    /// number that already contains the cache hits, so the part that costs money
+    /// has to be taken back out of it.
     var lastBilled: Int { max(lastInput - lastCached, 0) }
-
-    /// The share of this chat's prompt traffic that was cache. Without it,
-    /// "billed 90k" beside "cache 1.85M" reads as a bug rather than as one
-    /// prompt sent 76 times, 95% of it reused.
-    var hitRate: Int {
-        grossInput > 0 ? Int((Double(cached) / Double(grossInput) * 100).rounded()) : 0
-    }
 }
 
 @MainActor
