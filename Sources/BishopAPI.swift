@@ -129,7 +129,8 @@ struct SessionInfo: Identifiable, Hashable {
 
 struct UsageStats {
     var calls = 0
-    var input = 0
+    var billedInput = 0
+    var grossInput = 0
     var output = 0
     var cached = 0
     var sessionCost = ""
@@ -138,6 +139,18 @@ struct UsageStats {
     var lastOutput = 0
     var lastCost = ""
     var totalCost = ""
+
+    /// The last call's prompt, split the way the fold prints it: the provider
+    /// reports the PROMPT as one number that already contains the cache hits, so
+    /// the billed part has to be taken back out of it.
+    var lastBilled: Int { max(lastInput - lastCached, 0) }
+
+    /// The share of this chat's prompt traffic that was cache. Without it,
+    /// "billed 90k" beside "cache 1.85M" reads as a bug rather than as one
+    /// prompt sent 76 times, 95% of it reused.
+    var hitRate: Int {
+        grossInput > 0 ? Int((Double(cached) / Double(grossInput) * 100).rounded()) : 0
+    }
 }
 
 @MainActor
@@ -551,14 +564,20 @@ final class BishopAPI: ObservableObject {
     }
 
     /// The one place the usage report is turned into the struct the strip reads,
-    /// so /api/state and a live stats event cannot drift apart. last_cached and
-    /// total_cost are here because the strip now shows the cache hit of the last
-    /// call and the machine's lifetime spend as well as this chat's.
+    /// so /api/state and a live stats event cannot drift apart.
+    ///
+    /// The report's "input" is the billed (uncached) prompt - the server already
+    /// took the hits out of it - and "cached" is the reused part, so the prompt's
+    /// true size is the two added back up. Keep that in mind before showing
+    /// "input" to anyone: on its own it looks like the prompt, and it is not.
     private func applyStats(_ u: [String: Any]) {
+        let billed = u["input"] as? Int ?? 0
+        let cached = u["cached"] as? Int ?? 0
         usage = UsageStats(calls: u["calls"] as? Int ?? 0,
-                           input: u["input"] as? Int ?? 0,
+                           billedInput: billed,
+                           grossInput: u["input_gross"] as? Int ?? (billed + cached),
                            output: u["output"] as? Int ?? 0,
-                           cached: u["cached"] as? Int ?? 0,
+                           cached: cached,
                            sessionCost: u["cost_total"] as? String ?? "",
                            lastInput: u["last_input"] as? Int ?? 0,
                            lastCached: u["last_cached"] as? Int ?? 0,

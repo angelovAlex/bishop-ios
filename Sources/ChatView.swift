@@ -315,20 +315,25 @@ struct ChatView: View {
 
     // MARK: counters (one dim line, tap for the report)
 
-    /// The strip shows the four counters THAT MATTER all the time - calls, in,
-    /// cache, out - then this chat's cost. Cache belongs on the first line and
-    /// not only in the fold (the web page keeps it in its fold): it is what makes
-    /// a long session cheap (a cached prompt token is ~50x cheaper than a fresh
-    /// one), so a big `in` next to a small cost is unexplainable without it.
-    /// `in` is the BILLED prompt - gross minus cache hits - as on the page.
+    /// The strip: the prompt (gross, with the part served 50x cheaper called out),
+/// the tokens generated, and this chat's cost.
+    ///
+    /// Alex, seeing an earlier version: "I see cache now, but it does not look
+    /// correct, in 75k, cache 1.56m, out 20.8k. How can it be that cache is
+    /// 1.56m?" Nothing was miscounted - that session sent a ~25k prompt 73 times
+    /// and 95% of it was reused, so 1.85M prompt tokens against 95k billed is
+    /// right. The fault was the LABELS: `in` was the billed part while `cache`
+    /// was cumulative gross, two different measures side by side, so `in 75k`
+    /// read as "the prompt was 75k" and `cache 1.56M` then looked impossible.
+    /// The prompt now leads at its true size and the reuse is a plain percentage
+    /// of it, so the pair explains itself without the legend.
     private var statsStrip: some View {
         Button { withAnimation { showStats.toggle() } } label: {
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 8) {
                     if let u = api.usage {
                         Text("calls \(u.calls)").bold()
-                        Text("in \(short(u.input))").bold()
-                        Text("cache \(short(u.cached))").bold()
+                        Text("in \(short(u.grossInput)) (\(u.hitRate)% cached)").bold()
                         Text("out \(short(u.output))").bold()
                         Text(u.sessionCost).bold()
                         Spacer()
@@ -337,7 +342,7 @@ struct ChatView: View {
                         Text("no call yet").bold(); Spacer()
                     }
                 }
-                .lineLimit(1).minimumScaleFactor(0.8)
+                .lineLimit(1).minimumScaleFactor(0.75)
                 if showStats { statsDetail }
             }
             .font(.system(size: 11, design: .monospaced))
@@ -355,11 +360,12 @@ struct ChatView: View {
     private var statsDetail: some View {
         VStack(alignment: .leading, spacing: 1) {
             if let u = api.usage {
-                Text("last  in \(short(u.lastInput))  cache \(short(u.lastCached))  out \(short(u.lastOutput))  \(u.lastCost)")
+                Text("last call  billed \(short(u.lastBilled)) of \(short(u.lastInput)) prompt, out \(short(u.lastOutput))  \(u.lastCost)")
+                Text("this chat  billed \(short(u.billedInput))   cache \(short(u.cached))")
                 Text("session \(u.sessionCost)   lifetime \(u.totalCost)")
             }
-            Text("in = prompt billed full price (gross minus cache hits)")
-            Text("cache = prefix already paid for, ~50x cheaper")
+            Text("prompt = this chat's prompts added up (the last one is an example)")
+            Text("billed = prompt tokens that missed cache, and cost real money")
         }
         .foregroundStyle(.gray.opacity(0.75))
     }
