@@ -315,26 +315,53 @@ struct ChatView: View {
 
     // MARK: counters (one dim line, tap for the report)
 
+    /// The strip shows the four counters THAT MATTER all the time - calls, in,
+    /// cache, out - then this chat's cost. Cache belongs on the first line and
+    /// not only in the fold (the web page keeps it in its fold): it is what makes
+    /// a long session cheap (a cached prompt token is ~50x cheaper than a fresh
+    /// one), so a big `in` next to a small cost is unexplainable without it.
+    /// `in` is the BILLED prompt - gross minus cache hits - as on the page.
     private var statsStrip: some View {
         Button { withAnimation { showStats.toggle() } } label: {
-            HStack(spacing: 8) {
-                if let u = api.usage {
-                    Text("calls \(u.calls)").bold()
-                    Text("in \(short(u.input))").bold()
-                    Text("out \(short(u.output))").bold()
-                    Text(u.sessionCost).bold()
-                    Spacer()
-                    Image(systemName: showStats ? "chevron.up" : "chevron.right").font(.caption2)
-                } else {
-                    Text("no call yet").bold(); Spacer()
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 8) {
+                    if let u = api.usage {
+                        Text("calls \(u.calls)").bold()
+                        Text("in \(short(u.input))").bold()
+                        Text("cache \(short(u.cached))").bold()
+                        Text("out \(short(u.output))").bold()
+                        Text(u.sessionCost).bold()
+                        Spacer()
+                        Image(systemName: showStats ? "chevron.up" : "chevron.right").font(.caption2)
+                    } else {
+                        Text("no call yet").bold(); Spacer()
+                    }
                 }
+                .lineLimit(1).minimumScaleFactor(0.8)
+                if showStats { statsDetail }
             }
             .font(.system(size: 11, design: .monospaced))
             .foregroundStyle(.gray)
-            .lineLimit(1).minimumScaleFactor(0.8)
             .padding(.horizontal, 14).padding(.bottom, 4)
         }
         .buttonStyle(.plain)
+    }
+
+    /// The fold behind the chevron: what the last call was, each total's price,
+    /// and how many cache hits that call got. The lifetime figure is here rather
+    /// than on the first line because it is a machine total, not this chat's.
+    /// One Text per line, not one Text with newlines: lineLimit(1) counts
+    /// newlines, so a two-line string would have its legend HALF clipped away.
+    private var statsDetail: some View {
+        VStack(alignment: .leading, spacing: 1) {
+            if let u = api.usage {
+                Text("last  in \(short(u.lastInput))  cache \(short(u.lastCached))  out \(short(u.lastOutput))  \(u.lastCost)")
+                Text("session \(u.sessionCost)   lifetime \(u.totalCost)")
+            }
+            Text("in = prompt billed full price (gross minus cache hits)")
+            Text("cache = prefix already paid for, ~50x cheaper")
+        }
+        .foregroundStyle(.gray.opacity(0.75))
     }
 
     private func short(_ v: Int) -> String {

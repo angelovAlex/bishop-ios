@@ -134,8 +134,10 @@ struct UsageStats {
     var cached = 0
     var sessionCost = ""
     var lastInput = 0
+    var lastCached = 0
     var lastOutput = 0
     var lastCost = ""
+    var totalCost = ""
 }
 
 @MainActor
@@ -276,16 +278,7 @@ final class BishopAPI: ObservableObject {
             guard let id = $0["id"] as? String else { return nil }
             return SessionInfo(id: id, title: $0["title"] as? String ?? id)
         }
-        if let u = s["usage"] as? [String: Any] {
-            usage = UsageStats(calls: u["calls"] as? Int ?? 0,
-                               input: u["input"] as? Int ?? 0,
-                               output: u["output"] as? Int ?? 0,
-                               cached: u["cached"] as? Int ?? 0,
-                               sessionCost: u["cost_total"] as? String ?? "",
-                               lastInput: u["last_input"] as? Int ?? 0,
-                               lastOutput: u["last_output"] as? Int ?? 0,
-                               lastCost: u["last_cost"] as? String ?? "")
-        }
+        if let u = s["usage"] as? [String: Any] { applyStats(u) }
     }
 
     /// The stored transcript of a session, as the same event shapes the live
@@ -557,6 +550,10 @@ final class BishopAPI: ObservableObject {
         stream.open(url("/api/stream"))
     }
 
+    /// The one place the usage report is turned into the struct the strip reads,
+    /// so /api/state and a live stats event cannot drift apart. last_cached and
+    /// total_cost are here because the strip now shows the cache hit of the last
+    /// call and the machine's lifetime spend as well as this chat's.
     private func applyStats(_ u: [String: Any]) {
         usage = UsageStats(calls: u["calls"] as? Int ?? 0,
                            input: u["input"] as? Int ?? 0,
@@ -564,7 +561,9 @@ final class BishopAPI: ObservableObject {
                            cached: u["cached"] as? Int ?? 0,
                            sessionCost: u["cost_total"] as? String ?? "",
                            lastInput: u["last_input"] as? Int ?? 0,
+                           lastCached: u["last_cached"] as? Int ?? 0,
                            lastOutput: u["last_output"] as? Int ?? 0,
-                           lastCost: u["last_cost"] as? String ?? "")
+                           lastCost: u["last_cost"] as? String ?? "",
+                           totalCost: u["total_cost"] as? String ?? "")
     }
 }
