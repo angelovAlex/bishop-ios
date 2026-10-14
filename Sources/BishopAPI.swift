@@ -63,17 +63,19 @@ struct ToolView {
     var ok = true               // for kind == ok: did the tool succeed
     var added = 0
     var removed = 0
-    var span = ""               // what a read covered ("lines 1 to 19"), a search's "2 files"
+    var span = ""               // what a read covered ("lines 1 to 19"), a search's "2 files",
+                            // a command's "1.20s" - or "exit 1, 0.30s" when it failed
     var note = ""               // what a search did NOT cover: "hidden folders skipped"
     var rows: [Row] = []
 
     /// Does this view DESCRIBE the row, rather than just report on it? A call's
-    /// view describes (an edit's chip and diff, a read's file, a search's hits);
-    /// a result's only reports ("ok", true). A result must never take a
-    /// description's place - the chip and the diff would vanish the moment the
-    /// tool answered, which is exactly how the edit chip once disappeared.
+    /// view describes (an edit's chip and diff, a read's file, a search's hits,
+    /// a command's box); a result's only reports ("ok", true). A result must
+    /// never take a description's place - the chip and the diff would vanish the
+    /// moment the tool answered, which is exactly how the edit chip once
+    /// disappeared.
     static func describes(_ v: ToolView?) -> Bool {
-        v?.kind == "edit" || v?.kind == "read" || v?.kind == "search"
+        v?.kind == "edit" || v?.kind == "read" || v?.kind == "search" || v?.kind == "shell"
     }
 
     /// The row's view once a result has arrived: the result's own when it carries
@@ -85,8 +87,14 @@ struct ToolView {
     /// way round (its diff is in the CALL's view, its result only reports "ok"),
     /// and a plain row draws the result's line anyway - so both of those answer
     /// with the view the row already had, which is what the caller passes as `call`.
+    ///
+    /// A COMMAND is a read's case, with the wait turned into a picture: its
+    /// output, its exit code and its duration all exist only in the result, so
+    /// the result's view is the one that has to be drawn. (The call's view says
+    /// "Running", and is what the row spins a wheel for until then.)
     static func describedBy(_ call: ToolView?, _ result: ToolView?) -> ToolView? {
-        (result?.kind == "read" || result?.kind == "search" ? result : nil) ?? call
+        (result?.kind == "read" || result?.kind == "search" || result?.kind == "shell"
+            ? result : nil) ?? call
     }
 
     /// Does the row already say what the result would say? Then the result's own

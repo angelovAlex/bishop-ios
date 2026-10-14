@@ -931,6 +931,32 @@ struct ThoughtBlock: View {
 }
 
 
+/// The wheel a COMMAND's row wears while it runs, in the place every other chip
+/// puts its glyph - a standard spinning wheel, which is what Alex asked for there.
+///
+/// It is drawn rather than borrowed from ProgressView because a ProgressView
+/// carries a system control's size and tint and cannot be asked to sit exactly
+/// where a file glyph would. The ring spins on a REPEATING animation started in
+/// onAppear with withAnimation: `.animation(_:value:)` on a state set in the same
+/// pass as the insertion is COALESCED and the ring then never moves at all -
+/// verified on the simulator by diffing two frames of a running row (0 pixels
+/// moved), and it is the whole point of the row.
+struct ChipWheel: View {
+    @State private var on = false
+    var body: some View {
+        Circle()
+            .trim(from: 0, to: 0.75)
+            .stroke(Color(white: 0.62), style: StrokeStyle(lineWidth: 1.6, lineCap: .round))
+            .frame(width: 10, height: 10)
+            .rotationEffect(.degrees(on ? 360 : 0))
+            .onAppear {
+                withAnimation(.linear(duration: 0.7).repeatForever(autoreverses: false)) {
+                    on = true
+                }
+            }
+    }
+}
+
 /// A file edit, a file read or a search, drawn the way VS Code writes it in a
 /// transcript: the thing in a chip - its glyph in blue, its name, what this call
 /// did to it - and the content under it. A read says ", lines 1 to 19" after the
@@ -951,17 +977,35 @@ struct EditChip: View {
 
     private var read: Bool { view.kind == "read" }
     private var search: Bool { view.kind == "search" }
-    private var open: Bool { tapped ?? !(read || search) }
+    /// A COMMAND: the box holds the command, the verdict is its exit code and the
+    /// duration rides inside the box (it is the figure for the command it timed).
+    /// It is the only chip drawn while it is STILL HAPPENING - the call arrives
+    /// before the tool has answered, and that is what the wheel is for.
+    private var shell: Bool { view.kind == "shell" }
+    private var open: Bool { tapped ?? !(read || search || shell) }
     private func toggle() { withAnimation(.easeInOut(duration: 0.15)) { tapped = !open } }
     /// A read carries the span of lines it covered, a search how much it found;
-    /// an edit's counts are already in the chip, so it says nothing out here.
+    /// an edit's counts are already in the chip, so it says nothing out here. A
+    /// command's duration is in its box, so a comma out here would separate two
+    /// things that belong together.
     private var span: String {
         (read || search) && !view.span.isEmpty ? ", \(view.span)" : ""
     }
+    /// What the chip says happened. A command's is the only one that changes by
+    /// itself: its call has run nothing yet, so it says Running until the exit
+    /// code arrives - the wheel beside it is that same fact, drawn.
+    private var label: String {
+        if !view.subtitle.isEmpty { return view.subtitle }
+        return read ? "Read" : search ? "Found" : shell ? "Running" : "Edited"
+    }
+    /// A command's own words are already in view.note (the tool's reason for
+    /// killing it) and its output is the rows, so the raw result text would say
+    /// the same thing twice. Every other chip has nowhere else to put it.
+    private var shownResult: String { shell ? "" : result }
     /// An edit counts +/- in green and red; a read's or a search's chip holds only
     /// the name, so a read of ONE line needs its span out there to say anything.
     private var counts: Text? {
-        if read || search { return nil }
+        if read || search || shell { return nil }    // only an edit counts lines
         guard view.added > 0 || view.removed > 0 else { return nil }
         let plus = view.added > 0 ? Text("+\(view.added)").foregroundStyle(EditChip.green)
                                   : Text("")
@@ -978,14 +1022,30 @@ struct EditChip: View {
                 // then the file. A chip starts with its tick already in place
                 // (the row appears after the tool ran or is replaying a finished
                 // turn), and mark() rewrites it if the result says otherwise.
-                if let ok {
+                //
+                // A COMMAND wears the WHEEL here until its exit code arrives: it
+                // is the only row that exists before it has an answer, so the
+                // verdict and the waiting are ONE slot - otherwise the check would
+                // appear somewhere the wheel never was, and the row would jump
+                // sideways the moment the command finished. The slot is a fixed
+                // width for the same reason.
+                if shell {
+                    Group {
+                        if let ok {
+                            Text(ok ? "\u{2713}" : "\u{2717}")
+                                .font(.system(size: 12, weight: .bold))
+                                .foregroundStyle(ok ? EditChip.green : EditChip.red)
+                        } else {
+                            ChipWheel()
+                        }
+                    }
+                    .frame(width: 12, alignment: .leading)
+                } else if let ok {
                     Text(ok ? "\u{2713}" : "\u{2717}")
                         .font(.system(size: 12, weight: .bold))
                         .foregroundStyle(ok ? EditChip.green : EditChip.red)
                 }
-                Text(view.subtitle.isEmpty ? (read ? "Read" : search ? "Found" : "Edited")
-                                           : view.subtitle)
-                    .foregroundStyle(Color(white: 0.62))
+                Text(label).foregroundStyle(Color(white: 0.62))
                 // The box and the span are ONE group, so the ", lines 1 to 19"
                 // hugs the box instead of floating a stack-spacing away from it.
                 HStack(spacing: 0) {
@@ -996,11 +1056,31 @@ struct EditChip: View {
                         // which looked instead of finding what it named. It was
                         // briefly a language badge (TS, PY) and Alex asked for
                         // the glyph back.
-                        Image(systemName: search ? "magnifyingglass"
-                                                 : read ? "doc.text" : "pencil.tip.crop.circle")
-                            .font(.system(size: 12, weight: .bold)).foregroundStyle(EditChip.blue)
-                        Text(view.title).foregroundStyle(Color(white: 0.92)).lineLimit(1)
-                        counts
+                        //
+                        // A command's glyph slot is left empty: its wheel and then its
+                        // verdict are in the lead slot, so a second mark inside
+                        // the box would be the same thing said twice. Every other
+                        // chip's glyph says WHAT was acted on (a file, a
+                        // magnifier), which is why this is the one exception.
+                        if !shell {
+                            Image(systemName: search ? "magnifyingglass"
+                                                     : read ? "doc.text" : "pencil.tip.crop.circle")
+                                .font(.system(size: 12, weight: .bold)).foregroundStyle(EditChip.blue)
+                        }
+                        Text(view.title).foregroundStyle(shell ? EditChip.warm : Color(white: 0.92))
+                            .lineLimit(1)
+                        if !shell { counts }
+                        // A command's duration rides IN its box, right after the
+                        // command it timed - the same place the browser draws it
+                        // - so the two figures cannot be separated by a row that
+                        // ran out of width.
+                        if shell && !view.span.isEmpty {
+                            Text(view.span).foregroundStyle(Color(white: 0.5))
+                                .padding(.leading, 8)
+                        }
+                        // The command gives way when the row runs out of width,
+                        // never the duration: a long command used to push "9.63s"
+                        // off the right edge of a phone.
                     }
                     .font(.system(size: 12.5, weight: .medium, design: .monospaced))
                     .padding(.horizontal, 9).padding(.vertical, 4)
@@ -1014,14 +1094,16 @@ struct EditChip: View {
                 }
             }
             // What a search did NOT cover ("hidden folders skipped; result limit
-            // reached"). It is outside the fold on purpose: a list that stopped
-            // early reads as the whole tree unless this is in sight, and the fold
-            // is exactly where a reader would not look. Only a search has one.
+            // reached"), or why a command was killed. It is outside the fold on
+            // purpose: a list that stopped early reads as the whole tree unless
+            // this is in sight, and the fold is exactly where a reader would not
+            // look. A command's is a FAILURE, so it keeps the red.
             if !view.note.isEmpty {
                 Text(view.note).font(.system(size: 10.5))
-                    .foregroundStyle(Color(white: 0.45))
+                    .foregroundStyle(shell && ok == false ? EditChip.red.opacity(0.9)
+                                                          : Color(white: 0.45))
             }
-            if open, !view.rows.isEmpty || !result.isEmpty {
+            if open, !view.rows.isEmpty || !shownResult.isEmpty {
                 if !view.rows.isEmpty {
                     // Scrolls sideways rather than wrapping: a wrapped line pushes
                     // its continuation under the +/- marker, and the marker is what
@@ -1051,8 +1133,8 @@ struct EditChip: View {
                 // A FAILED edit or read has one thing to say that the chip cannot:
                 // the tool's own message ("old_text not found in X", "no such
                 // file"). It goes in the fold and is never folded away by us.
-                if !result.isEmpty {
-                    Text(result).font(.system(size: 11, design: .monospaced))
+                if !shownResult.isEmpty {
+                    Text(shownResult).font(.system(size: 11, design: .monospaced))
                         .foregroundStyle(EditChip.red.opacity(0.9))
                         .frame(maxWidth: .infinity, alignment: .leading).padding(.top, 2)
                 }
@@ -1068,6 +1150,11 @@ struct EditChip: View {
         r.tag == "hit" ? r.text : (r.tag == "add" ? "+ " : r.tag == "del" ? "- " : "  ") + r.text
     }
     private static let blue = Color(red: 0.35, green: 0.65, blue: 1.0)
+    /// What a COMMAND's box is written in: the warm ink of a terminal prompt, the
+    /// way the reference (VS Code's own transcript) paints it. A command is the
+    /// one chip whose content is something someone TYPED, so it is the one that
+    /// gets to look like shell.
+    private static let warm = Color(red: 0.91, green: 0.75, blue: 0.49)
     private static let green = Color(red: 0.4, green: 0.85, blue: 0.5)
     private static let red = Color(red: 1.0, green: 0.45, blue: 0.45)
     private static func fg(_ tag: String) -> Color {
