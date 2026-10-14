@@ -13,6 +13,7 @@ struct ChatView: View {
     @State private var attachments: [(path: String, name: String)] = []
     @State private var picker: [PhotosPickerItem] = []
     @State private var showStats = false
+    @State private var showLevels = false    // the effort chip's popover
     @State private var fullPicture: String?
     @State private var picking = false        // the session sheet
     @State private var mine: UUID?            // a just-sent message, to be put at the top
@@ -122,7 +123,6 @@ struct ChatView: View {
         VStack(spacing: 0) {
             if api.busy { liveBanner }
             statsStrip
-            effortRow
             composer
         }
     }
@@ -385,31 +385,57 @@ struct ChatView: View {
         return String(format: "%.2fM", Double(v) / 1_000_000)
     }
 
-    // MARK: reasoning effort (the web UI's pill, one row above the composer)
+    // MARK: reasoning effort (the chip in the composer's option row)
 
     /// How hard Bishop thinks before answering - the same POST /api/effort the
-    /// page's <select> calls. The levels come from the server (/api/state), so a
-    /// new one needs no app release; the row is hidden until they arrive rather
-    /// than showing a guess. A segmented picker, not a Menu: a Menu's label is
-    /// built once (the lesson the session title already taught), while a Picker
-    /// re-reads the selection on every redraw.
-    private var effortRow: some View {
+    /// page's <select> calls. The row it used to be (a segmented picker one line
+    /// above the composer) is gone: Alex wants the composer laid out like the
+    /// reference - text field on top, and a row of options UNDER it between the
+    /// + and the send arrow, with this as the first option. Hence a chip the
+    /// width of its own word, in a popover rather than a full-width control.
+    ///
+    /// Hidden until /api/state has sent the levels: a chip with no level would
+    /// either be empty or a guess.
+    private var effortChip: some View {
         Group {
             if !api.levels.isEmpty {
-                HStack(spacing: 8) {
-                    Text("effort").font(.system(size: 11, design: .monospaced))
-                    Picker("effort", selection: Binding(
-                        get: { api.effort },
-                        set: { picked in Task { await api.setEffort(picked) } })) {
+                Button { showLevels = true } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: "brain").font(.system(size: 12, weight: .semibold))
+                        Text(api.effort).font(.system(size: 13, design: .monospaced))
+                    }
+                    .foregroundStyle(glassBar ? .white : .primary)
+                    .padding(.horizontal, 12).frame(height: 34)
+                    .background(glassBar ? AnyShapeStyle(.clear) : AnyShapeStyle(Color(white: 0.2)))
+                    .clipShape(.capsule)
+                }
+                .popover(isPresented: $showLevels) {
+                    VStack(alignment: .leading, spacing: 0) {
                         ForEach(api.levels, id: \.self) { level in
-                            Text(level).tag(level)
+                            Button {
+                                showLevels = false
+                                Task { await api.setEffort(level) }
+                            } label: {
+                                HStack {
+                                    Text(level).font(.system(size: 14, design: .monospaced))
+                                    Spacer(minLength: 24)
+                                    // The tick marks the level in force; without
+                                    // it the list reads as commands rather than
+                                    // as a state.
+                                    if level == api.effort { Image(systemName: "checkmark") }
+                                }
+                                .padding(.vertical, 9).padding(.horizontal, 14)
+                                .contentShape(.rect)
+                            }
+                            .buttonStyle(.plain)
                         }
                     }
-                    .pickerStyle(.segmented)
-                    .disabled(api.busy)      // the level is read when a turn starts
+                    .padding(.vertical, 4)
+                    .presentationCompactAdaptation(.popover)
                 }
-                .foregroundStyle(.gray)
-                .padding(.horizontal, 6).padding(.bottom, 6)
+                // The level is read when a turn starts, so changing it mid-turn
+                // would do nothing anyway.
+                .disabled(api.busy)
             }
         }
     }
@@ -434,17 +460,15 @@ struct ChatView: View {
                     }.padding(.horizontal, 4)
                 }
             }
-            // The composer is one glass pill holding a + on the left and the send
-            // button on the right, with the text field sharing the same surface,
-            // instead of a grey rounded box with loose circles on top of it.
-            HStack(alignment: .bottom, spacing: 6) {
-                PhotosPicker(selection: $picker, maxSelectionCount: 4, matching: .images) {
-                    Image(systemName: "plus").font(.system(size: 18, weight: .semibold))
-                        .frame(width: 34, height: 34)
-                        .foregroundStyle(glassBar ? .white : .primary)
-                        .background(glassBar ? AnyShapeStyle(.clear) : AnyShapeStyle(Color(white: 0.2)))
-                        .clipShape(.circle)
-                }
+            // The composer is one glass pill: the text field takes the top, and
+            // a row of controls sits under it - + on the left, the options in
+            // the middle, the send arrow on the right. That is the reference
+            // layout (Alex: "when I type it types above plus and send button,
+            // and between plus and send we will have more options"): the field
+            // gets the full width and grows upward, while the controls keep one
+            // row each, instead of the field being squeezed between the two
+            // circles and the + riding up with it as the text wrapped.
+            VStack(spacing: 4) {
                 TextField("Message Bishop", text: $draft, axis: .vertical)
                     .lineLimit(1...6)
                     .textFieldStyle(.plain)
@@ -454,18 +478,29 @@ struct ChatView: View {
                     // No submitLabel/onSubmit on purpose: the Return key must
                     // insert a newline (multiline field, `axis: .vertical`),
                     // and the round arrow on the right is what sends.
-                Button { api.busy ? stop() : send() } label: {
-                    // One button, two jobs: a turn in flight turns it into the
-                    // stop square, and pressing it ends the turn (the stream's
-                    // 'end' then clears busy). While idle it is the send arrow.
-                    Image(systemName: api.busy ? "stop.fill" : "arrow.up")
-                        .font(.system(size: 16, weight: .bold))
-                        .frame(width: 34, height: 34)
-                        .foregroundStyle(glassBar ? AnyShapeStyle(.white) : AnyShapeStyle(.black))
-                        .background(glassBar ? AnyShapeStyle(.clear) : AnyShapeStyle(.white))
-                        .clipShape(.circle)
+                HStack(spacing: 8) {
+                    PhotosPicker(selection: $picker, maxSelectionCount: 4, matching: .images) {
+                        Image(systemName: "plus").font(.system(size: 18, weight: .semibold))
+                            .frame(width: 34, height: 34)
+                            .foregroundStyle(glassBar ? .white : .primary)
+                            .background(glassBar ? AnyShapeStyle(.clear) : AnyShapeStyle(Color(white: 0.2)))
+                            .clipShape(.circle)
+                    }
+                    effortChip
+                    Spacer(minLength: 4)
+                    Button { api.busy ? stop() : send() } label: {
+                        // One button, two jobs: a turn in flight turns it into the
+                        // stop square, and pressing it ends the turn (the stream's
+                        // 'end' then clears busy). While idle it is the send arrow.
+                        Image(systemName: api.busy ? "stop.fill" : "arrow.up")
+                            .font(.system(size: 16, weight: .bold))
+                            .frame(width: 34, height: 34)
+                            .foregroundStyle(glassBar ? AnyShapeStyle(.white) : AnyShapeStyle(.black))
+                            .background(glassBar ? AnyShapeStyle(.clear) : AnyShapeStyle(.white))
+                            .clipShape(.circle)
+                    }
+                    .disabled(!api.busy && draft.trimmingCharacters(in: .whitespaces).isEmpty && attachments.isEmpty)
                 }
-                .disabled(!api.busy && draft.trimmingCharacters(in: .whitespaces).isEmpty && attachments.isEmpty)
             }
             .padding(8)
             .glassBar(glassBar, radius: 26, fallback: Color(white: 0.11))
