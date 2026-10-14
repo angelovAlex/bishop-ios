@@ -26,7 +26,7 @@ import Foundation
 /// and rows are grouped that way so a thought folds as one line instead of the
 /// transcript turning into a wall of loose fragments.
 struct ChatEvent: Identifiable {
-    enum Kind { case user, thought, answer, tool, result, image, info, error }
+    enum Kind { case user, recall, thought, answer, tool, result, image, info, error }
     let id = UUID()
     var kind: Kind
     var text = ""               // reasoning, answer, tool arguments, result, info
@@ -322,6 +322,11 @@ final class BishopAPI: ObservableObject {
         var thought: Int?      // index of the thought taking text right now, nil once closed
         var answer: Int?       // same, for the answer bubble
         var tool: Int?         // the row a tool result belongs to, once its call was drawn
+        // A recall is NOT a phase boundary: it arrives between the user's bubble
+        // and the turn it belongs to (a live turn sends it before that bubble is
+        // drawn at all, a replay puts it right after it), so it must not close a
+        // thought or an answer that is still streaming. It only breaks the tool
+        // pairing, so a result cannot fold into a call from an earlier turn.
         // `secs` is NOT set here: this pass groups a live BATCH as well as a
         // replay, and folding one on arrival stamped every thought with the
         // second it had been in the array - which is why a running thought read
@@ -354,6 +359,13 @@ final class BishopAPI: ObservableObject {
             case "user":
                 closeThought(); closeAnswer()
                 out.append(ChatEvent(kind: .user, text: e["text"] as? String ?? ""))
+            case "recall":
+                // What memory put in front of this turn: its own row, holding the
+                // block the model was actually given - whose own lead-in names
+                // the query, so nothing here repeats it. Deliberately does NOT
+                // close the thought or the answer, and does not become the `tool`
+                // row either - see the cursors above.
+                out.append(ChatEvent(kind: .recall, text: e["text"] as? String ?? ""))
             case "reasoning":
                 closeAnswer()
                 if thought == nil { out.append(ChatEvent(kind: .thought, open: true)); thought = out.count - 1 }

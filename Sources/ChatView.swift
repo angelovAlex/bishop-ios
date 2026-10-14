@@ -519,6 +519,22 @@ struct ChatView: View {
         })
     }
 
+    /// A recall goes in FRONT of the turn it belongs to, not at the bottom of the
+    /// transcript. A phase continues only while it is the LAST row - that is how
+    /// a streamed thought or answer grows - so appending a recall in the middle
+    /// of one would slice the thought in two, and a step that happened to open
+    /// with reasoning would leave that half stranded below the new row.
+    ///
+    /// The turn is the run of OPEN rows at the end: live, that is the thought or
+    /// the answer being written. In a replay every row of a finished hop is
+    /// closed, so the recall lands after them - which is where it belongs anyway,
+    /// with the rest of that hop.
+    private func insertRecall(_ row: ChatEvent) {
+        var at = events.count
+        while at > 0 && events[at - 1].open { at -= 1 }
+        events.insert(row, at: at)
+    }
+
     /// One batch of streamed rows onto the transcript. A thought or an answer
     /// continues the last row of its kind if that is what it is; a tool call
     /// closes the open thought first, exactly like grow()/endThought() do in the
@@ -537,6 +553,8 @@ struct ChatView: View {
             var fresh = row
             fresh.open = true
             events.append(fresh)
+        case .recall:
+            insertRecall(row)
         case .tool:
             closePhase()
             // Arguments are re-sent as they stream, so a call already on screen
@@ -666,6 +684,8 @@ struct EventRow: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
         case .thought:
             ThoughtBlock(text: event.text, secs: event.secs, running: event.open)
+        case .recall:
+            RecallRow(text: event.text)
         case .tool:
             // One row per call: the call is the summary, the result is inside the
             // fold. An EDIT is drawn the way VS Code draws one, and a READ of a
@@ -1079,6 +1099,42 @@ struct Collapsible: View {
             if open, !text.isEmpty {
                 Text(text).font(.system(size: 11, design: .monospaced))
                     .foregroundStyle(.gray).textSelection(.enabled).padding(.leading, 10)
+            }
+        }
+    }
+}
+
+/// The memory notes this turn was answered on, as one folded line: what recall
+/// pasted in front of the message, kept openable so it can be read and checked
+/// rather than trusted. It is neither side of the conversation - the model read
+/// it, nobody typed it - so it is a quiet grey row, not a bubble, and it is born
+/// folded because the block can be a few kilobytes.
+///
+/// The label is the block's OWN lead-in ("recall: 3 notes for 'who is olivia'"),
+/// which also names the query it was fetched for - so the line, the fold and the
+/// request cannot disagree, and a weak match says so in the same place.
+struct RecallRow: View {
+    let text: String
+    @State private var open = false
+
+    private var label: String {
+        let first = text.split(separator: "\n", maxSplits: 1).first.map(String.init) ?? ""
+        let trimmed = first.trimmingCharacters(in: CharacterSet(charactersIn: "()"))
+        return trimmed.isEmpty ? "recall" : trimmed
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 5) {
+                Image(systemName: "book.closed").font(.system(size: 10))
+                Text(label).font(.system(size: 11, design: .monospaced)).lineLimit(1)
+            }
+            .foregroundStyle(.gray)
+            .onTapGesture { withAnimation(.easeInOut(duration: 0.15)) { open.toggle() } }
+            if open {
+                Text(text).font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(Color(white: 0.5))
+                    .textSelection(.enabled).padding(.leading, 10)
             }
         }
     }
