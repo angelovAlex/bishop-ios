@@ -101,7 +101,17 @@ struct ChatView: View {
             }
             .buttonBorderShape(.circle).barButton(glassBar)
         }
-        .padding(.horizontal, 10).padding(.vertical, 2)
+        // Alex: "there is some not used space on left and right on ios client.
+        // remove paddings so all width of screen will be used". The 10pt that
+        // used to be here was a THIRD inset, on top of the chevron's own 17pt
+        // circle and the title capsule's 14pt - its only job was to keep the
+        // BAR's rounded glass edge off the display edge, and the bar is a
+        // full-width band that has no rounded edge to keep in. The padding the
+        // controls need is theirs (the circle's hit area, the capsule's inner
+        // text), so nothing here is load-bearing; dropping it gives the row the
+        // 20pt back for the title and lets the symbols sit at the system's own
+        // bar margin.
+        .padding(.horizontal, 0).padding(.vertical, 2)
         .tint(glassBar ? .white : .gray)
     }
 
@@ -148,7 +158,7 @@ struct ChatView: View {
             Text(liveLine).font(.system(size: 11, design: .monospaced)).lineLimit(1)
             Spacer()
         }
-        .padding(.horizontal, 14).padding(.bottom, 4)
+        .padding(.horizontal, 6).padding(.bottom, 4)
         .foregroundStyle(.gray)
     }
 
@@ -182,7 +192,13 @@ struct ChatView: View {
                     }
                     Color.clear.frame(height: 1).id("bottom")
                 }
-                .padding(.horizontal, 12).padding(.top, 8)
+                // No horizontal padding: the transcript runs edge to edge
+                // (Alex's ask), because every row that needs a margin already
+                // carries its own - a bubble and the user's picture right-align
+                // at 14/0, a tool chip leads at the container's 0, and the
+                // thought's grey rule is drawn AT the left edge, which is the
+                // one place an inset would show as a stripe of nothing.
+                .padding(.horizontal, 0).padding(.top, 8)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(GeometryReader { g in
                     Color.clear.onChange(of: g.size.height) { _, h in content = h }
@@ -352,7 +368,7 @@ struct ChatView: View {
             }
             .font(.system(size: 11, design: .monospaced))
             .foregroundStyle(.gray)
-            .padding(.horizontal, 14).padding(.bottom, 4)
+            .padding(.horizontal, 6).padding(.bottom, 4)
         }
         .buttonStyle(.plain)
     }
@@ -392,7 +408,7 @@ struct ChatView: View {
                     .disabled(api.busy)      // the level is read when a turn starts
                 }
                 .foregroundStyle(.gray)
-                .padding(.horizontal, 14).padding(.bottom, 6)
+                .padding(.horizontal, 6).padding(.bottom, 6)
             }
         }
     }
@@ -414,7 +430,7 @@ struct ChatView: View {
                                     }.padding(2)
                                 }
                         }
-                    }.padding(.horizontal, 12)
+                    }.padding(.horizontal, 4)
                 }
             }
             // The composer is one glass pill holding a + on the left and the send
@@ -452,7 +468,10 @@ struct ChatView: View {
             }
             .padding(8)
             .glassBar(glassBar, radius: 26, fallback: Color(white: 0.11))
-            .padding(.horizontal, 10)
+            // 4, not 10: the pill now stretches nearly the whole width, which is
+            // the room that went to waste beside it. Two points are kept so the
+            // glass's rounded edge and the screen's edge do not read as one line.
+            .padding(.horizontal, 4)
         }
         .padding(.bottom, 6)
         .onChange(of: picker) { _, items in Task { await addPhotos(items); picker = [] } }
