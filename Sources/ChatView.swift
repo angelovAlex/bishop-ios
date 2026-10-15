@@ -142,7 +142,7 @@ struct ChatView: View {
             Text("follow\(following ? "1" : "0") below\(belowFold ? "1" : "0") drag\(dragging ? "1" : "0") place\(placing ? "1" : "0")")
                 .font(.system(size: 10, design: .monospaced))
             Spacer()
-            Text("cc\(Int(geo.content)) ct\(Int(geo.container)) off\(Int(geo.offset))")
+            Text("cc\(Int(geo.content)) ct\(Int(geo.container)) off\(Int(geo.offset)) vis\(Int(geo.visibleMaxY))")
                 .font(.system(size: 10, design: .monospaced))
         }
         .foregroundStyle(following ? .green : .orange)
@@ -1474,13 +1474,28 @@ struct ScrollGeo: Equatable {
     var content: CGFloat = 0
     var container: CGFloat = 0
     var offset: CGFloat = 0
+    var visibleMaxY: CGFloat = 0
 
-    /// No room for a scroll means the newest line is on screen whatever the
-    /// offset says - the state the app launches in. 1pt of slack: a scroll at
-    /// rest reports its offset a fraction of a point short of the end.
-    var below: Bool {
-        !(content <= container || offset + container >= content - 1)
-    }
+    /// Is any of the newest line still hidden under the bottom edge?
+    ///
+    /// Measured against the VISIBLE RECT, not `offset + container`. That sum was
+    /// the bug on Alex's phone: under a `safeAreaBar` the bar's height is not in
+    /// `containerSize`, so the sum stops 112pt short of `contentSize` - exactly
+    /// the bottom bars - and the test can never see the bottom. Read off his
+    /// phone at the very bottom of a 43951pt transcript: cc43951 ct291 off43548,
+    /// i.e. offset + container = 43839, 112 short of the end. `below` was stuck
+    /// true, `following` was therefore stuck false, and the ONLY thing left that
+    /// could set it was send() - which is precisely his symptom ("follow only
+    /// sets when a new message is sent... I cant reactivate it by scrolling").
+    ///
+    /// `visibleRect` is the part of the content actually on screen, so it carries
+    /// whatever insets the bars added and cannot disagree with the view the
+    /// reader is looking at. Same 1pt of slack: a scroll at rest reports its
+    /// offset a fraction of a point short of the end.
+    ///
+    /// The `content <= container` half stays: a transcript that fits the screen
+    /// has no bottom to reach, and that is the state a short chat launches in.
+    var below: Bool { !(content <= container || visibleMaxY >= content - 1) }
 }
 
 private struct TranscriptScroll: ViewModifier {
@@ -1499,7 +1514,8 @@ private struct TranscriptScroll: ViewModifier {
                 .onScrollGeometryChange(for: ScrollGeo.self) { g in
                     ScrollGeo(content: g.contentSize.height,
                               container: g.containerSize.height,
-                              offset: g.contentOffset.y)
+                              offset: g.contentOffset.y,
+                              visibleMaxY: g.visibleRect.maxY)
                 } action: { _, g in
                     onGeo(g)
                 }
