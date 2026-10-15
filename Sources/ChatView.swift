@@ -241,18 +241,15 @@ struct ChatView: View {
                 // stayed true almost permanently and follow() returned early every
                 // single time. That was "autoscroll does not work at all".
                 dragging = touching
-                // And only a reader's gesture may change the reader's place, once
-                // it has come to rest.
-                //   ...AND ONLY WHEN THE FINGER HAD IT. A gesture that ends at
-                // the bottom is the ambiguous one, and the geometry above already
-                // answers it (it re-arms the moment the bottom is really on
-                // screen). Deciding it here as well meant a release at the bottom
-                // re-armed from a `belowFold` half a frame old, so a reader who
-                // had scrolled away and come back got no automatic scroll again.
-                // Only a gesture that comes to rest AWAY from the bottom switches
-                // following off, and that test does not care how fresh the
-                // geometry is.
-                if settledByReader, belowFold { following = false }
+                // And a reader's gesture decides the reader's place only once it
+                // has come to rest. Both this line and the geometry above write
+                // `following` from the same reading, and that redundancy is
+                // wanted: the geometry callback is the one that fires on the way
+                // down, this one is the only writer left if the finger settles
+                // without a further geometry change. They cannot disagree -
+                // `belowFold` is assigned by every geometry change, mid-drag
+                // included, so it is never a frame behind at the settle.
+                if settledByReader { following = !belowFold }
             })
             // What needs following, and the ORDER here is the whole trick: it is
             // the newest text ending up BELOW THE FOLD that is watched, not the
