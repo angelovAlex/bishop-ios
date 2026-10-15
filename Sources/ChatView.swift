@@ -530,7 +530,7 @@ struct ChatView: View {
         guard !text.isEmpty || !paths.isEmpty else { return }
         draft = ""
         attachments = []
-        typing = false          // the keyboard goes down and gives the answer the screen
+        dropKeyboard()          // the keyboard goes down and gives the answer the screen
         // The stream replays the turn, but the user's own line is not echoed
         // back mid-turn, so show it at once - same shape as the web page.
         let echo = paths.isEmpty ? text : text + (text.isEmpty ? "" : "\n") + "[picture]"
@@ -543,6 +543,33 @@ struct ChatView: View {
                 events.append(ChatEvent(kind: .info, text: problem))
             }
         }
+    }
+
+    /// Take the keyboard down when a message goes out.
+    ///
+    /// NOT just `typing = false`, which is what this used to be: the composer
+    /// hangs off the scroll view in a `safeAreaBar` (see BarsOverTranscript), and
+    /// on iOS 26 a focused field inside a BAR does not honour a FocusState change
+    /// - the keyboard simply stays up. Apple's forum has it as its own thread
+    /// ("@FocusState Doesn't Work" in a toolbar, 797948): the same TextField moved
+    /// out of the bar unfocuses normally, so the bug is the bar, not the binding.
+    ///
+    /// That is why this worked once and then stopped: nothing in `send()` changed,
+    /// the composer's HOME did. On the iOS 18 SDK the app takes the legacy VStack
+    /// branch (no safeAreaBar) and `typing = false` alone still dismisses - which
+    /// is exactly why the local simulator build cannot reproduce Alex's report and
+    /// the iOS 26 build can.
+    ///
+    /// resignFirstResponder goes through UIKit, below the focus engine, so it is
+    /// not subject to the bar's bug. Both are called: FocusState still clears
+    /// SwiftUI's own focus state to false, so the field is not left believing it
+    /// is focused when it is not - it just cannot be the only lever.
+    private func dropKeyboard() {
+        typing = false
+        #if canImport(UIKit)
+        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder),
+                                        to: nil, from: nil, for: nil)
+        #endif
     }
 
     private func stop() {
