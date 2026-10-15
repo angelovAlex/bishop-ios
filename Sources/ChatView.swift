@@ -212,18 +212,27 @@ struct ChatView: View {
             // Where the newest text is: below the fold, or already on screen?
             // Only this decides whether a scroll would be a scroll DOWN.
             .modifier(TranscriptScroll { below in
+                // FOLLOWING is "the reader is at the newest text", and the
+                // transcript being at its bottom IS that fact - so it is settled
+                // here, on every geometry change, and not only when a gesture
+                // ends. Nothing else ever turned it back on: Alex's report is
+                // that autoscroll works until he touches the transcript once and
+                // never returns after that. A finger on the glass is the one
+                // exception - mid-drag the reader is still deciding - and a
+                // scroll this view makes itself only ever brings the bottom UP,
+                // to a place that was already on screen, so it cannot re-arm
+                // anything by accident.
+                if !dragging { following = !below }
                 belowFold = below
-                // RE-ARM on the fact that matters: the transcript is at the
-                // bottom, so that is the reader's place and following resumes.
-                // Without this the flag could only ever be switched back on by a
-                // gesture that happened to END exactly at the bottom, and one
-                // that ended a moment early - or any moment where the geometry
-                // read differently than the finger meant - left it off for good.
-                // The symptom was Alex's: after the thinking block folded there
-                // was no automatic scroll any more and he had to scroll by hand
-                // for the rest of the session. Not while a finger is on it,
-                // though: mid-drag the reader is deciding, not at rest.
-                if !below, !dragging { following = true }
+                // ...and having arrived at the bottom, WAKE the follow. Geometry
+                // reports a new position from its own callback, where SwiftUI
+                // writes no view state into the layout pass, so no onChange sees
+                // the swing this change makes to `belowFold`: without this call a
+                // reader who scrolls back down while text streams sits on hidden
+                // text until the next token. Not mid-drag - that is the reader
+                // still deciding - on arrival at the very bottom `dragging` has
+                // already cleared whatever the gesture did.
+                if !below, !dragging { follow(proxy) }
             } onPhase: { touching, settledByReader in
                 // ONLY a finger, or the momentum it left behind, blocks following.
                 // Not "not idle": this view's own scrolls report `.animating`, and
@@ -234,7 +243,16 @@ struct ChatView: View {
                 dragging = touching
                 // And only a reader's gesture may change the reader's place, once
                 // it has come to rest.
-                if settledByReader { following = !belowFold }
+                //   ...AND ONLY WHEN THE FINGER HAD IT. A gesture that ends at
+                // the bottom is the ambiguous one, and the geometry above already
+                // answers it (it re-arms the moment the bottom is really on
+                // screen). Deciding it here as well meant a release at the bottom
+                // re-armed from a `belowFold` half a frame old, so a reader who
+                // had scrolled away and come back got no automatic scroll again.
+                // Only a gesture that comes to rest AWAY from the bottom switches
+                // following off, and that test does not care how fresh the
+                // geometry is.
+                if settledByReader, belowFold { following = false }
             })
             // What needs following, and the ORDER here is the whole trick: it is
             // the newest text ending up BELOW THE FOLD that is watched, not the
