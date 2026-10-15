@@ -142,7 +142,7 @@ struct ChatView: View {
             Text("follow\(following ? "1" : "0") below\(belowFold ? "1" : "0") drag\(dragging ? "1" : "0") place\(placing ? "1" : "0")")
                 .font(.system(size: 10, design: .monospaced))
             Spacer()
-            Text("cc\(Int(geo.content)) ct\(Int(geo.container)) off\(Int(geo.offset)) vis\(Int(geo.visibleMaxY))")
+            Text("cc\(Int(geo.content)) ct\(Int(geo.container)) off\(Int(geo.offset)) vis\(Int(geo.visibleMaxY)) ins\(Int(geo.bottomInset))")
                 .font(.system(size: 10, design: .monospaced))
         }
         .foregroundStyle(following ? .green : .orange)
@@ -265,14 +265,16 @@ struct ChatView: View {
                 // stayed true almost permanently and follow() returned early every
                 // single time. That was "autoscroll does not work at all".
                 dragging = touching
-                // And a reader's gesture decides the reader's place only once it
-                // has come to rest. Both this line and the geometry above write
-                // `following` from the same reading, and that redundancy is
-                // wanted: the geometry callback is the one that fires on the way
-                // down, this one is the only writer left if the finger settles
-                // without a further geometry change. They cannot disagree -
-                // `belowFold` is assigned by every geometry change, mid-drag
-                // included, so it is never a frame behind at the settle.
+                // A finger on the glass means the reader is taking over, so follow
+                // goes OFF at once rather than being re-decided when the gesture
+                // ends (Alex: "make it to disable follow mode as soon as drag is
+                // set"). Waiting for the settle is what let the geometry re-arm
+                // mid-gesture - `!dragging` in the callback above is false only
+                // while the finger is actually down, so a reader who had not yet
+                // reached the bottom kept being dragged there by arriving text,
+                // fighting the hand that was moving it. OFF here, and the settle
+                // branch below decides whether it comes back on.
+                if touching { following = false }
                 if settledByReader { following = !belowFold }
             })
             // What needs following, and the ORDER here is the whole trick: it is
@@ -1475,6 +1477,12 @@ struct ScrollGeo: Equatable {
     var container: CGFloat = 0
     var offset: CGFloat = 0
     var visibleMaxY: CGFloat = 0
+    /// How far the transcript is allowed to scroll on UNDER the bottom bars.
+    var bottomInset: CGFloat = 0
+    /// The content height the scroll actually has to travel: the transcript plus
+    /// the room the bars claim below it. At the very bottom `visibleMaxY` equals
+    /// this, which is what makes "am I there?" an equality and not a guess.
+    var reach: CGFloat { content + bottomInset }
 
     /// Is any of the newest line still hidden under the bottom edge?
     ///
@@ -1490,12 +1498,21 @@ struct ScrollGeo: Equatable {
     ///
     /// `visibleRect` is the part of the content actually on screen, so it carries
     /// whatever insets the bars added and cannot disagree with the view the
-    /// reader is looking at. Same 1pt of slack: a scroll at rest reports its
-    /// offset a fraction of a point short of the end.
+    /// reader is looking at.
+    ///
+    /// The `bottomInset` term is the second half of the same story, and Alex found
+    /// it by eye: "there is now a big zone where it stays green". Comparing
+    /// `visibleMaxY` with `contentSize` alone went green as soon as the END OF THE
+    /// CONTENT came into view - but the transcript can still scroll 556pt further,
+    /// because the bottom bars hold that much room open below it. So green arrived
+    /// more than half a screen early. The bottom is `content + bottomInset`, the
+    /// point where the scroll actually stops, and at the very bottom his phone
+    /// reads vis48246 cc47690 - 556 apart, which is the inset, exactly.
     ///
     /// The `content <= container` half stays: a transcript that fits the screen
-    /// has no bottom to reach, and that is the state a short chat launches in.
-    var below: Bool { !(content <= container || visibleMaxY >= content - 1) }
+    /// has no bottom to reach, and `reach` would otherwise be positive for a chat
+    /// that cannot scroll at all.
+    var below: Bool { !(content <= container || visibleMaxY >= reach - 1) }
 }
 
 private struct TranscriptScroll: ViewModifier {
@@ -1515,7 +1532,8 @@ private struct TranscriptScroll: ViewModifier {
                     ScrollGeo(content: g.contentSize.height,
                               container: g.containerSize.height,
                               offset: g.contentOffset.y,
-                              visibleMaxY: g.visibleRect.maxY)
+                              visibleMaxY: g.visibleRect.maxY,
+                              bottomInset: g.contentInsets.bottom)
                 } action: { _, g in
                     onGeo(g)
                 }
