@@ -765,6 +765,10 @@ struct ChatView: View {
             // A result joins the call above it (one row per call). With no call
             // to join it keeps its own row, folded as it always was.
             guard let i = toolRow(for: nil) else { events.append(row); return }
+            // The live output was the RUNNING command's; the result replaces it
+            // (the row draws the result's own rows from here on), so the copy
+            // goes rather than sitting under the finished output.
+            events[i].liveRows = []
             // The verdict was already read off this event while it was decoded,
             // when its call was in the same batch; a result that arrived alone
             // (the call long drawn) is judged here, by the same rule.
@@ -777,6 +781,19 @@ struct ChatView: View {
             // result's only reports ("ok", true): never overwrite the former -
             // except for a read, whose content only exists in the result.
             events[i].view = ToolView.describedBy(events[i].view, row.view)
+        case .output:
+            // A command printing WHILE it runs. It lands on the row its call
+            // opened and nowhere else: the whole output so far REPLACES the copy
+            // there, because the Mac re-sends all of it every time - so a report
+            // this app missed is corrected by the next one, and there is no
+            // accumulation to keep in step. No call on screen (a list starting
+            // with an output event) means nothing to draw on.
+            //
+            // The lookup passes the ROW, so the provider's call id decides: two
+            // commands in one turn are two rows, and a report must not fill the
+            // wrong one - the same id rule that pairs a result with its call.
+            guard let i = toolRow(for: row) else { return }
+            events[i].liveRows = row.liveRows
         default:
             closePhase()
             events.append(row)
@@ -907,7 +924,7 @@ struct EventRow: View {
             // stays one tap away. The full call stays one tap further in.
             if let v = event.view, ToolView.describes(v) {
                 EditChip(view: v, raw: event.text, result: event.ok == false ? event.result : "",
-                         ok: event.ok)
+                         ok: event.ok, live: event.liveRows)
             } else {
                 ToolRow(event: event)
             }
@@ -917,6 +934,12 @@ struct EventRow: View {
             else if let v = event.view, ToolView.describes(v) {
                 EditChip(view: v, raw: "", result: event.ok == false ? event.text : "")
             } else { Collapsible(summary: event.name, text: event.text, mono: true, tint: .gray) }
+        case .output:
+            // A command's output while it runs belongs to the row its call opened
+            // (`merge` puts it there). With no such row on screen - a transcript
+            // that began mid-run - there is nowhere to draw it, and the result
+            // will carry the whole output anyway.
+            EmptyView()
         case .image:
             // Bound BOTH sides: a phone screenshot is 20:1 tall, so capping only
             // the height leaves a column of black stretching the whole row.
@@ -1178,10 +1201,22 @@ struct EditChip: View {
     let raw: String
     var result = ""                     // a failure's own words, if it had any
     var ok: Bool? = nil                 // nil until the result arrived
+    /// A running command's output so far, straight off its row (`ChatEvent
+    /// .liveRows`) - beside `view` rather than inside it because it is the ROW's
+    /// state, like `result` and `ok`: it arrives after the call's view was built,
+    /// and the view it belongs to is the same view the whole time.
+    var live: [ToolView.Row] = []
     /// nil until the user taps: a READ and a SEARCH are born folded, an EDIT (a
     /// diff, and the only place those lines are written down) is born open. Alex
     /// asked for the read to stop dumping a whole file into the transcript on
     /// arrival - and a search is the same case, at 300 hits.
+    ///
+    /// A COMMAND that a front end is drawing as it runs (`stream`) is born open
+    /// too and STAYS open: the output arriving is the whole point of the row, and
+    /// folding it would hide the very thing being watched. That is not a rule of
+    /// its own here - `open` is what it always was, and `stream` is carried on the
+    /// row from the moment its call arrived, through the result, so nothing flips
+    /// it shut when the command finishes.
     @State private var tapped: Bool? = nil
     @State private var showCall = false
 
@@ -1192,7 +1227,34 @@ struct EditChip: View {
     /// It is the only chip drawn while it is STILL HAPPENING - the call arrives
     /// before the tool has answered, and that is what the wheel is for.
     private var shell: Bool { view.kind == "shell" }
-    private var open: Bool { tapped ?? !(read || search || shell) }
+    /// Is this command being drawn WHILE it runs? Then its row is born open, and
+    /// what it draws is the output so far (`liveRows`) until the result lands.
+    private var streaming: Bool { shell && view.stream }
+    private var open: Bool { tapped ?? (streaming || !(read || search || shell)) }
+    /// The lines under the command: the LIVE output while it runs, the result's
+    /// own once it has answered. `liveRows` is empty in every case but a running
+    /// command, so this is the result's rows in practice - and the two can never
+    /// be shown at once, because `merge` clears the live copy when the result lands.
+    private var bodyRows: [ToolView.Row] { live.isEmpty ? view.rows : live }
+    /// A command that is running and has printed NOTHING yet: the card is a card
+    /// in both front ends, so it is shown empty rather than not shown at all - the
+    /// wheel above is the answer, and a row that grew a box only at its first
+    /// line would jump. `ok == nil` is what says it is still running: the result
+    /// sets it, and a command that finished with nothing to print (or timed out
+    /// with no partial output) must not keep a waiting card under a row that has
+    /// already answered.
+    private var showEmptyCard: Bool { streaming && bodyRows.isEmpty && ok == nil }
+    private var emptyCard: some View {
+        VStack(spacing: 0) {
+            Text("waiting for output\u{2026}").font(.system(size: 11, design: .monospaced))
+                .foregroundStyle(Color(white: 0.45))
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 4).padding(.vertical, 2)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Color(white: 0.16)))
+    }
     private func toggle() { withAnimation(.easeInOut(duration: 0.15)) { tapped = !open } }
     /// A read carries the span of lines it covered, a search how much it found;
     /// an edit's counts are already in the chip, so it says nothing out here. A
@@ -1313,14 +1375,16 @@ struct EditChip: View {
                     .foregroundStyle(shell && ok == false ? EditChip.red.opacity(0.9)
                                                           : Color(white: 0.45))
             }
-            if open, !view.rows.isEmpty || !shownResult.isEmpty {
-                if !view.rows.isEmpty {
+            if open, !bodyRows.isEmpty || !shownResult.isEmpty || showEmptyCard {
+                if showEmptyCard {
+                    emptyCard
+                } else if !bodyRows.isEmpty {
                     // Scrolls sideways rather than wrapping: a wrapped line pushes
                     // its continuation under the +/- marker, and the marker is what
                     // the eye follows down the block.
                     ScrollView(.horizontal, showsIndicators: false) {
                         VStack(spacing: 0) {
-                            ForEach(view.rows) { r in
+                            ForEach(bodyRows) { r in
                                 Text(r.tag == "gap" ? "" : Self.marked(r))
                                     .font(.system(size: 11, design: .monospaced))
                                     .foregroundStyle(r.tag == "eq" ? Color(white: 0.55) : EditChip.fg(r.tag))

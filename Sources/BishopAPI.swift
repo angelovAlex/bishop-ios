@@ -26,7 +26,7 @@ import Foundation
 /// and rows are grouped that way so a thought folds as one line instead of the
 /// transcript turning into a wall of loose fragments.
 struct ChatEvent: Identifiable {
-    enum Kind { case user, recall, thought, answer, tool, result, image, info, error }
+    enum Kind { case user, recall, thought, answer, tool, result, output, image, info, error }
     let id = UUID()
     var kind: Kind
     var text = ""               // reasoning, answer, tool arguments, result, info
@@ -38,6 +38,13 @@ struct ChatEvent: Identifiable {
     var started = Date()
     var view: ToolView?         // how the Mac wants this tool row DRAWN, if it wants more than text
     var callId = ""             // the provider's tool call id, so a result finds its call
+    /// A command's output SO FAR, while it runs: the rows a `tool_output` event
+    /// carries, which REPLACE the previous ones (the Mac re-sends the whole
+    /// output every time, so a report that was missed costs nothing). It is what
+    /// the row draws under its box until the real result lands, and `merge`
+    /// clears it then - so the live copy and the finished one are never both on
+    /// screen, where they could only disagree.
+    var liveRows: [ToolView.Row] = []
     // A tool call and its result are ONE row: the call is the summary and the
     // result sits inside the fold, so these two live on the call's own row
     // rather than making a row of their own (webui.html addTool/addToolResult).
@@ -67,6 +74,15 @@ struct ToolView {
                             // a command's "1.20s" - or "exit 1, 0.30s" when it failed
     var note = ""               // what a search did NOT cover: "hidden folders skipped"
     var rows: [Row] = []
+    /// Is a front end drawing this command WHILE it runs? Then its row opens on
+    /// arrival and stays open, because the output arriving is the whole point of
+    /// it. The Mac decides (it is the one that knows a stream is attached) and it
+    /// says so on both stages of the call, so a row open through the run does not
+    /// fold itself at the instant the command finishes - the output the reader has
+    /// been watching would vanish exactly when it became complete. False for a
+    /// command replayed out of a stored session, which is therefore born folded
+    /// like a read.
+    var stream = false
 
     /// Does this view DESCRIBE the row, rather than just report on it? A call's
     /// view describes (an edit's chip and diff, a read's file, a search's hits,
@@ -93,8 +109,18 @@ struct ToolView {
     /// the result's view is the one that has to be drawn. (The call's view says
     /// "Running", and is what the row spins a wheel for until then.)
     static func describedBy(_ call: ToolView?, _ result: ToolView?) -> ToolView? {
-        (result?.kind == "read" || result?.kind == "search" || result?.kind == "shell"
-            ? result : nil) ?? call
+        guard let out = (result?.kind == "read" || result?.kind == "search" || result?.kind == "shell"
+            ? result : nil) ?? call else { return nil }
+        var v = out
+        // A command's `stream` is decided by its CALL and CARRIED onto the result.
+        // The row was opened because a front end was drawing it as it ran, and
+        // folding it the moment the command finishes would hide the output
+        // exactly when it became complete - the reader is looking at that output.
+        // The Mac clears its sink before it builds the result's view (the run is
+        // over), so this flag would otherwise be lost here and the row would
+        // collapse on the last byte.
+        if call?.stream == true { v.stream = true }
+        return v
     }
 
     /// Does the row already say what the result would say? Then the result's own
@@ -103,6 +129,14 @@ struct ToolView {
     /// so it is never dropped - the caller asks only when `good`.
     static func speaksForItself(_ v: ToolView?) -> Bool {
         describes(v) || v?.kind == "ok"
+    }
+
+    /// One event field's rows, however the front end spelled it - used both for the
+    /// view's own output and for a live report while a command runs.
+    static func rowsOf(_ raw: Any?) -> [Row] {
+        (raw as? [[String: Any]] ?? []).map {
+            Row(tag: $0["tag"] as? String ?? "eq", text: $0["t"] as? String ?? "")
+        }
     }
 
     init?(_ d: [String: Any]?) {
@@ -116,9 +150,8 @@ struct ToolView {
         removed = d["removed"] as? Int ?? 0
         span = d["span"] as? String ?? ""
         note = d["note"] as? String ?? ""
-        rows = (d["rows"] as? [[String: Any]] ?? []).map {
-            Row(tag: $0["tag"] as? String ?? "eq", text: $0["t"] as? String ?? "")
-        }
+        stream = d["stream"] as? Bool ?? false
+        rows = ToolView.rowsOf(d["rows"])
     }
 }
 
@@ -421,8 +454,32 @@ final class BishopAPI: ObservableObject {
                     // description - except for a read, whose content only ever
                     // exists in the result.
                     out[i].view = ToolView.describedBy(out[i].view, view)
+                    // The run is over and its output is now the RESULT's (the
+                    // row draws that from here on), so the live copy goes: two
+                    // copies of the same lines could only disagree.
+                    out[i].liveRows = []
                 } else {
                     out.append(ChatEvent(kind: .result, text: body, name: "result", view: view))
+                }
+            case "tool_output":
+                // A command printing WHILE it runs. Its rows REPLACE the previous
+                // ones - the Mac re-sends the whole output every time - so a
+                // report this app missed costs nothing.
+                //
+                // When the call is in THIS batch (a stored session replayed whole)
+                // it is folded onto its call right here, one row per call. When it
+                // is NOT - which is every LIVE report, because a live turn flushes
+                // each event as its own batch, the call having been grouped in an
+                // earlier one - it becomes a row of its own (.output) for
+                // ChatView.merge to land on the call wherever that was drawn.
+                // Looking the call up in `out` here, unconditionally, is what made
+                // the live output vanish: there was never a call in the batch.
+                let rows = ToolView.rowsOf(e["rows"])
+                if let i = tool, sameCall(e, out[i]) {
+                    out[i].liveRows = rows
+                } else {
+                    out.append(ChatEvent(kind: .output, name: e["name"] as? String ?? "",
+                                         callId: e["id"] as? String ?? "", liveRows: rows))
                 }
             case "image":
                 out.append(ChatEvent(kind: .image, name: e["title"] as? String ?? "",
