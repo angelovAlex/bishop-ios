@@ -23,6 +23,7 @@ struct ChatView: View {
     @State private var belowFold = false      // ...and the newest text is below the fold right now
     @State private var dragging = false       // a finger (or its momentum) is moving the transcript
     @State private var placing = false        // a just-sent message is on its way to the top
+    @State private var geo = ScrollGeo()      // the scroll's raw numbers, for the debug strip
     @FocusState private var typing: Bool      // the composer's focus, so send() can drop the keyboard
 
     var body: some View {
@@ -141,7 +142,7 @@ struct ChatView: View {
             Text("follow\(following ? "1" : "0") below\(belowFold ? "1" : "0") drag\(dragging ? "1" : "0") place\(placing ? "1" : "0")")
                 .font(.system(size: 10, design: .monospaced))
             Spacer()
-            Text("c\(Int(content)) v\(Int(viewport))")
+            Text("cc\(Int(geo.content)) ct\(Int(geo.container)) off\(Int(geo.offset))")
                 .font(.system(size: 10, design: .monospaced))
         }
         .foregroundStyle(following ? .green : .orange)
@@ -232,7 +233,7 @@ struct ChatView: View {
             .scrollDismissesKeyboard(.interactively)
             // Where the newest text is: below the fold, or already on screen?
             // Only this decides whether a scroll would be a scroll DOWN.
-            .modifier(TranscriptScroll { below in
+            .modifier(TranscriptScroll { g in
                 // FOLLOWING is "the reader is at the newest text", and the
                 // transcript being at its bottom IS that fact - so it is settled
                 // here, on every geometry change, and not only when a gesture
@@ -243,6 +244,8 @@ struct ChatView: View {
                 // scroll this view makes itself only ever brings the bottom UP,
                 // to a place that was already on screen, so it cannot re-arm
                 // anything by accident.
+                geo = g                                  // the debug strip's numbers
+                let below = g.below
                 if !dragging { following = !below }
                 belowFold = below
                 // ...and having arrived at the bottom, WAKE the follow. Geometry
@@ -1462,9 +1465,30 @@ struct ConnectBanner: View {
 /// caller falls back to comparing content height with the viewport -
 /// direction-blind, but still enough to keep a transcript that fits the screen
 /// from being nudged.
+/// `onScrollGeometryChange` hands these three numbers over as one value; the
+/// "is the newest line below the fold?" test is made of them, and the debug strip
+/// prints them raw. Boiling them down to one Bool first is exactly what hides a
+/// degenerate measurement - a container of 0 reads as "below the fold" forever,
+/// and then nothing can ever re-arm the follow.
+struct ScrollGeo: Equatable {
+    var content: CGFloat = 0
+    var container: CGFloat = 0
+    var offset: CGFloat = 0
+
+    /// No room for a scroll means the newest line is on screen whatever the
+    /// offset says - the state the app launches in. 1pt of slack: a scroll at
+    /// rest reports its offset a fraction of a point short of the end.
+    var below: Bool {
+        !(content <= container || offset + container >= content - 1)
+    }
+}
+
 private struct TranscriptScroll: ViewModifier {
-    /// Is the newest line below the fold? (called as the scroll moves)
-    let onBottom: (Bool) -> Void
+    /// The scroll's geometry, as it moves. Handed over whole rather than
+    /// pre-reduced to the `below` test, so the caller can show the three numbers
+    /// the test is made of - a wrong container or content height is invisible
+    /// once it has been boiled down to one Bool.
+    let onGeo: (ScrollGeo) -> Void
     /// (is a finger or its momentum moving it, did a READER's gesture just settle)
     let onPhase: (Bool, Bool) -> Void
 
@@ -1472,15 +1496,12 @@ private struct TranscriptScroll: ViewModifier {
         #if compiler(>=6.0)
         if #available(iOS 18.0, *) {
             content
-                .onScrollGeometryChange(for: Bool.self) { g in
-                    // No room for a scroll means the newest line is on screen
-                    // whatever the offset says - the state the app launches in.
-                    // 1pt of slack: a scroll at rest reports its offset a
-                    // fraction of a point short of the end.
-                    !(g.contentSize.height <= g.containerSize.height
-                      || g.contentOffset.y + g.containerSize.height >= g.contentSize.height - 1)
-                } action: { _, below in
-                    onBottom(below)
+                .onScrollGeometryChange(for: ScrollGeo.self) { g in
+                    ScrollGeo(content: g.contentSize.height,
+                              container: g.containerSize.height,
+                              offset: g.contentOffset.y)
+                } action: { _, g in
+                    onGeo(g)
                 }
                 .onScrollPhaseChange { old, new in
                     // The phases only a finger can produce. `.animating` is what a
