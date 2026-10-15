@@ -122,9 +122,30 @@ struct ChatView: View {
     private var bottomBars: some View {
         VStack(spacing: 0) {
             if api.busy { liveBanner }
+            followStrip
             statsStrip
             composer
         }
+    }
+
+    /// TEMPORARY, at Alex's ask: what the follow logic thinks, on screen. Four
+    /// letters, so it fits one line in the strip's own type: F is `following`
+    /// (the reader is at the newest text and autoscroll is armed), B is
+    /// `belowFold` (the newest text is under the bottom edge, i.e. there IS
+    /// something to fix), D is `dragging` (a finger or its momentum owns the
+    /// scroll), P is `placing` (a just-sent message is flying to the top). Then
+    /// the two heights, because the fallback test compares them. Delete this
+    /// row - and the call above - once Alex has said what the flags do.
+    private var followStrip: some View {
+        HStack(spacing: 6) {
+            Text("follow\(following ? "1" : "0") below\(belowFold ? "1" : "0") drag\(dragging ? "1" : "0") place\(placing ? "1" : "0")")
+                .font(.system(size: 10, design: .monospaced))
+            Spacer()
+            Text("c\(Int(content)) v\(Int(viewport))")
+                .font(.system(size: 10, design: .monospaced))
+        }
+        .foregroundStyle(following ? .green : .orange)
+        .padding(.horizontal, 6).padding(.bottom, 2)
     }
 
     /// The session list: date + first words, the open one ticked.
