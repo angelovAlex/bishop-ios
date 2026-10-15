@@ -1231,30 +1231,17 @@ struct EditChip: View {
     /// what it draws is the output so far (`liveRows`) until the result lands.
     private var streaming: Bool { shell && view.stream }
     private var open: Bool { tapped ?? (streaming || !(read || search || shell)) }
-    /// The lines under the command: the LIVE output while it runs, the result's
-    /// own once it has answered. `liveRows` is empty in every case but a running
-    /// command, so this is the result's rows in practice - and the two can never
-    /// be shown at once, because `merge` clears the live copy when the result lands.
+    /// A command's lines: the LIVE output while it runs, the result's own once it
+    /// has answered. `liveRows` is empty in every case but a running command, so
+    /// this is the result's rows in practice - and the two can never be shown at
+    /// once, because `merge` clears the live copy when the result lands.
+    ///
+    /// A running command with NOTHING to show draws nothing at all. Alex asked for
+    /// the "waiting for output" placeholder to go (2026-10-15): the wheel beside
+    /// "Running" already says the command is going, so a card saying it in words
+    /// was one thing too many - and with the command on a terminal (tools.py) the
+    /// first line now arrives promptly, so the empty moment is brief in any case.
     private var bodyRows: [ToolView.Row] { live.isEmpty ? view.rows : live }
-    /// A command that is running and has printed NOTHING yet: the card is a card
-    /// in both front ends, so it is shown empty rather than not shown at all - the
-    /// wheel above is the answer, and a row that grew a box only at its first
-    /// line would jump. `ok == nil` is what says it is still running: the result
-    /// sets it, and a command that finished with nothing to print (or timed out
-    /// with no partial output) must not keep a waiting card under a row that has
-    /// already answered.
-    private var showEmptyCard: Bool { streaming && bodyRows.isEmpty && ok == nil }
-    private var emptyCard: some View {
-        VStack(spacing: 0) {
-            Text("waiting for output\u{2026}").font(.system(size: 11, design: .monospaced))
-                .foregroundStyle(Color(white: 0.45))
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 4).padding(.vertical, 2)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .clipShape(RoundedRectangle(cornerRadius: 6))
-        .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Color(white: 0.16)))
-    }
     private func toggle() { withAnimation(.easeInOut(duration: 0.15)) { tapped = !open } }
     /// A read carries the span of lines it covered, a search how much it found;
     /// an edit's counts are already in the chip, so it says nothing out here. A
@@ -1375,10 +1362,8 @@ struct EditChip: View {
                     .foregroundStyle(shell && ok == false ? EditChip.red.opacity(0.9)
                                                           : Color(white: 0.45))
             }
-            if open, !bodyRows.isEmpty || !shownResult.isEmpty || showEmptyCard {
-                if showEmptyCard {
-                    emptyCard
-                } else if !bodyRows.isEmpty {
+            if open, !bodyRows.isEmpty || !shownResult.isEmpty {
+                if !bodyRows.isEmpty {
                     // Scrolls sideways rather than wrapping: a wrapped line pushes
                     // its continuation under the +/- marker, and the marker is what
                     // the eye follows down the block.
