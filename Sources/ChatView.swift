@@ -246,7 +246,28 @@ struct ChatView: View {
                 // anything by accident.
                 geo = g                                  // the debug strip's numbers
                 let below = g.below
-                if !dragging { following = !below }
+                // TWO RULES, and between them they are the whole thing - Alex
+                // named one each:
+                //
+                //   at the bottom            -> follow, always
+                //   away from it under a hand -> do not
+                //
+                // "at the bottom" wins outright, so arriving there re-arms at once
+                // even mid-flick ("it should reactivate green as soon as it reaches
+                // bottom or more"), and a drag that starts at the bottom is not
+                // thrown off by its own first frame. Being away from the bottom
+                // only stops the follow while a finger OWNS the scroll - otherwise
+                // a newline growing the composer, which pushes the bottom down for
+                // the moment before the scroll catches up, would switch the follow
+                // off by itself ("it is in green but once there is new line in
+                // input field it goes orange again").
+                //
+                // This replaced `following = !below`, which turned the follow off
+                // whenever the transcript was not at the exact bottom - so the
+                // composer's growth and every ordinary frame of a drag could stop
+                // it, and nothing but a send could start it again.
+                if !below { following = true }
+                else if dragging { following = false }
                 belowFold = below
                 // ...and having arrived at the bottom, WAKE the follow. Geometry
                 // reports a new position from its own callback, where SwiftUI
@@ -257,7 +278,7 @@ struct ChatView: View {
                 // still deciding - on arrival at the very bottom `dragging` has
                 // already cleared whatever the gesture did.
                 if !below, !dragging { follow(proxy) }
-            } onPhase: { touching, settledByReader in
+            } onPhase: { touching in
                 // ONLY a finger, or the momentum it left behind, blocks following.
                 // Not "not idle": this view's own scrolls report `.animating`, and
                 // treating that as the reader meant that while text was arriving -
@@ -265,17 +286,22 @@ struct ChatView: View {
                 // stayed true almost permanently and follow() returned early every
                 // single time. That was "autoscroll does not work at all".
                 dragging = touching
-                // A finger on the glass means the reader is taking over, so follow
-                // goes OFF at once rather than being re-decided when the gesture
-                // ends (Alex: "make it to disable follow mode as soon as drag is
-                // set"). Waiting for the settle is what let the geometry re-arm
-                // mid-gesture - `!dragging` in the callback above is false only
-                // while the finger is actually down, so a reader who had not yet
-                // reached the bottom kept being dragged there by arriving text,
-                // fighting the hand that was moving it. OFF here, and the settle
-                // branch below decides whether it comes back on.
+                // The hand is what stops the follow, and it stops it the moment the
+                // drag is set rather than at the settle ("make it to disable follow
+                // mode as soon as drag is set"). The geometry callback above applies
+                // the other half - being AT the bottom re-arms, mid-gesture
+                // included - so this only ever has to switch it off, and only while
+                // the finger really owns the scroll.
                 if touching { following = false }
-                if settledByReader { following = !belowFold }
+                // ...and reaching the bottom brings it straight back, even if the
+                // gesture is still in flight (a flick's momentum IS the reader
+                // arriving). This is the other half of Alex's report: "it should
+                // reactivate green as soon as it reaches bottom or more" - waiting
+                // for the settle meant the strip only turned green once everything
+                // had come to rest, and a gesture that ended a hair short of the
+                // bottom left it orange for good. Arriving is a fact, so it is
+                // decided by the fact, not by the gesture's end.
+                if !belowFold { following = true }
             })
             // What needs following, and the ORDER here is the whole trick: it is
             // the newest text ending up BELOW THE FOLD that is watched, not the
@@ -1459,8 +1485,12 @@ struct ConnectBanner: View {
 /// autoscroll completely: while text streams, an animation is retargeted over
 /// and over, so `.animating` was nearly continuous and follow() never ran.
 ///
-/// `settledByReader`: did a reader's gesture just come to rest? That is the only
-/// moment the reader's place may be re-decided.
+/// The division of labour, and it is what Alex's last two reports pinned down:
+/// a TOUCH is the only thing that may stop following, and it stops it the instant
+/// the finger lands; reaching the BOTTOM is the only thing that may start it, and
+/// it starts it the instant the bottom arrives - mid-gesture, mid-momentum, even
+/// while the composer is growing under a newline. Deciding either one anywhere
+/// else is how the strip went orange while he was only typing.
 ///
 /// Both need iOS 18, and a lower deployment target cannot see the API at all
 /// (a missing symbol is a compile error even inside `#available`). There the
@@ -1521,8 +1551,8 @@ private struct TranscriptScroll: ViewModifier {
     /// the test is made of - a wrong container or content height is invisible
     /// once it has been boiled down to one Bool.
     let onGeo: (ScrollGeo) -> Void
-    /// (is a finger or its momentum moving it, did a READER's gesture just settle)
-    let onPhase: (Bool, Bool) -> Void
+    /// Is a finger, or the momentum it left behind, moving the transcript?
+    let onPhase: (Bool) -> Void
 
     func body(content: Content) -> some View {
         #if compiler(>=6.0)
@@ -1546,7 +1576,7 @@ private struct TranscriptScroll: ViewModifier {
                     func byFinger(_ p: ScrollPhase) -> Bool {
                         p == .tracking || p == .interacting || p == .decelerating
                     }
-                    onPhase(byFinger(new), new == .idle && byFinger(old))
+                    onPhase(byFinger(new))
                 }
         } else {
             content
