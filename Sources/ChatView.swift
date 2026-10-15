@@ -123,20 +123,34 @@ struct ChatView: View {
     private var bottomBars: some View {
         VStack(spacing: 0) {
             if api.busy { liveBanner }
-            followStrip
+            if showFollowDebug { followStrip }
             statsStrip
             composer
         }
     }
 
-    /// TEMPORARY, at Alex's ask: what the follow logic thinks, on screen. Four
-    /// letters, so it fits one line in the strip's own type: F is `following`
-    /// (the reader is at the newest text and autoscroll is armed), B is
-    /// `belowFold` (the newest text is under the bottom edge, i.e. there IS
-    /// something to fix), D is `dragging` (a finger or its momentum owns the
-    /// scroll), P is `placing` (a just-sent message is flying to the top). Then
-    /// the two heights, because the fallback test compares them. Delete this
-    /// row - and the call above - once Alex has said what the flags do.
+    /// OFF by default, and KEPT on purpose (Alex: "hide debug panel now, dont
+    /// remove it completely"). It is the one place the follow logic can be read
+    /// off the screen rather than reasoned about, and it already earned its keep:
+    /// the autoscroll bug that survived several commits was found by subtracting
+    /// the numbers it prints - cc43951 ct291 off43548 - which is a subtraction no
+    /// amount of reading the code had produced. Flip this to true and rebuild when
+    /// the transcript misbehaves again; it is a compile-time constant, so a
+    /// release build carries none of it.
+    private let showFollowDebug = false
+
+    /// What the follow logic thinks, and the four numbers it is made of.
+    ///
+    /// Left: F `following` (the reader is at the newest text and autoscroll is
+    /// armed), B `belowFold` (the newest line is under the bottom edge, so there is
+    /// something to fix), D `dragging` (a finger or its momentum owns the scroll),
+    /// P `placing` (a just-sent message is flying to the top). Green means armed.
+    ///
+    /// Right, in device points: cc content height, ct container height, off scroll
+    /// offset, vis the bottom of the visible content, ins the bottom content inset
+    /// the bars hold open. `below` is `vis < cc + ins` and nothing else, so a wrong
+    /// one of these is visible here directly - which is the only reason the real
+    /// bug was found.
     private var followStrip: some View {
         HStack(spacing: 6) {
             Text("follow\(following ? "1" : "0") below\(belowFold ? "1" : "0") drag\(dragging ? "1" : "0") place\(placing ? "1" : "0")")
