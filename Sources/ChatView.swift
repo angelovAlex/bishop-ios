@@ -15,7 +15,8 @@ struct ChatView: View {
     @State private var showStats = false
     @State private var showLevels = false    // the effort chip's popover
     @State private var fullPicture: String?
-    @State private var picking = false        // the session sheet
+    @State private var path: [ChatView.Screen] = []   // what the back menu pushed
+    @State private var request: MenuRequest?  // what a menu row asked for; see carry(_:)
     @State private var mine: UUID?            // a just-sent message, to be put at the top
     @State private var content: CGFloat = 0   // how tall the transcript is
     @State private var viewport: CGFloat = 0  // ...and how much room it has
@@ -32,10 +33,31 @@ struct ChatView: View {
         // edge, so nothing ever scrolled under the glass and the glass itself was
         // impossible to see; only a direct child can be pinned like this and get
         // the scroll edge effect (the frosted band under a bar).
-        transcript
-            .modifier(BarsOverTranscript(glass: glassBar, header: header, bottom: bottomBars))
-            .background(Color.black)
-            .preferredColorScheme(.dark)
+        // The stack wraps the WHOLE screen, bars included: Settings is pushed onto
+        // THIS stack, and the header (which holds the menu that asks for it) hangs
+        // off the scroll view through BarsOverTranscript - a stack around the
+        // transcript alone would leave that header outside it.
+        //
+        // The push is driven by `path`, not by a NavigationLink in the menu. A
+        // NavigationLink inside this Menu highlights its row, closes the menu and
+        // pushes NOTHING (watched on the simulator, twice) - a menu row can only
+        // report where to go, and the path is the state that actually goes there.
+        NavigationStack(path: $path) {
+            transcript
+                .modifier(BarsOverTranscript(glass: glassBar, header: header, bottom: bottomBars))
+                .navigationDestination(for: Screen.self) { s in
+                    switch s {
+                    case .settings: SettingsView(api: api)
+                    }
+                }
+        }
+        .background(Color.black)
+        .preferredColorScheme(.dark)
+        .onChange(of: request) { _, r in
+            guard let r else { return }
+            request = nil                    // one tap, one request
+            Task { await carry(r) }
+        }
             .task {
                 // Keep trying until the Mac answers. iOS asks "find devices on your
                 // local network" the first time the app touches 192.168.x.x, and the
@@ -53,7 +75,6 @@ struct ChatView: View {
             .sheet(item: Binding(get: { fullPicture.map(PicturePath.init) }, set: { fullPicture = $0?.path })) {
                 PictureView(path: $0.path, api: api)
             }
-            .sheet(isPresented: $picking) { sessionPicker }
     }
 
     // MARK: header
@@ -73,29 +94,23 @@ struct ChatView: View {
 
     private var header: some View {
         HStack(spacing: 12) {
-            // Same action as the title: it opens the session list, and a chevron
-            // is what iOS 26 puts in that corner. No .glass button style here -
-            // a bar already IS glass, and a glass button on glass reads as one
-            // more bubble; the reference draws plain symbols on the bar.
-            Button { picking = true } label: {
+            // Back: a menu, not the session list. Alex, on the phone: "when
+            // pressed back it should show a menu. in menu put setting button that
+            // will navigate to settings window".
+            //
+            Menu { menuItems } label: {
                 Image(systemName: "chevron.left").font(.system(size: 22, weight: .semibold))
                     .frame(width: 34, height: 34)
+                    .contentShape(.rect)
             }
-            .buttonBorderShape(.circle).barButton(false)
+            .buttonStyle(.plain)
+            .buttonBorderShape(.circle)
+            .accessibilityLabel("Back, menu")
 
-            // NOT a Menu: SwiftUI builds a Menu's label ONCE, so a picker showing
-            // the session title kept showing the fallback from before the first
-            // /api/state landed, however the data changed underneath it. The
-            // chevron shows that it opens the list; the title is WHITE and at
-            // title size, where .footnote grey was half the system's weight.
-            Button { picking = true } label: {
-                HStack(spacing: 6) {
-                    Text(title).font(.headline).foregroundStyle(.white).lineLimit(1)
-                    Image(systemName: "chevron.right").font(.footnote.weight(.semibold))
-                }
-                .padding(.horizontal, 14).frame(maxWidth: .infinity, minHeight: 34)
-            }
-            .buttonBorderShape(.capsule).barButton(glassBar)
+            // The title is plain, like the chevron: the menu it names is one tap
+            // away on the left now, so the capsule became a caption with no job.
+            Text(title).font(.headline).foregroundStyle(.white).lineLimit(1)
+                .frame(maxWidth: .infinity, minHeight: 34)
 
             Button { Task { await newChat() } } label: {
                 Image(systemName: "square.and.pencil").font(.system(size: 20, weight: .semibold))
@@ -163,29 +178,6 @@ struct ChatView: View {
         .padding(.horizontal, 6).padding(.bottom, 2)
     }
 
-    /// The session list: date + first words, the open one ticked.
-    private var sessionPicker: some View {
-        NavigationStack {
-            List(api.sessions) { s in
-                Button {
-                    picking = false
-                    Task { await open(s.id) }
-                } label: {
-                    HStack {
-                        Text(s.title).font(.system(size: 13, design: .monospaced))
-                            .foregroundStyle(.white)
-                        Spacer()
-                        if s.id == api.session { Image(systemName: "checkmark").foregroundStyle(.green) }
-                    }
-                }
-            }
-            .navigationTitle("Sessions")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close") { picking = false } } }
-        }
-        .presentationDetents([.medium, .large])
-    }
-
     /// A turn is in flight somewhere (here, the terminal, or another phone):
     /// its words land at the END of the transcript, so say so at the top.
     private var liveBanner: some View {
@@ -213,18 +205,84 @@ struct ChatView: View {
         api.sessions.first { $0.id == api.session }?.title ?? (api.session.isEmpty ? "Bishop" : api.session)
     }
 
+    // MARK: the back menu
+
+    /// What a menu row asked for. A menu is dismissed the instant one of its
+    /// buttons is chosen, so no row may start async work itself - it would be
+    /// cancelled with the menu. Every button therefore only sets this value, and
+    /// the one task below carries the request out. `nil` means nothing pending.
+    struct MenuRequest: Equatable {
+        var screen: Screen?               // push a screen (Settings)
+        var newChat = false
+        var session: String?
+        var stop = false
+        var speech = false
+        var restart = false
+    }
+
+    /// A screen the chat can push. An enum rather than a bare Bool because the
+    /// stack's path is the state that drives it: `NavigationLink` inside the
+    /// chevron's Menu highlights the row and pushes NOTHING (verified on the
+    /// simulator - the menu closes and the chat stays), so the menu reports the
+    /// destination and the path does the pushing, which cannot silently fail.
+    enum Screen: Hashable { case settings }
+
+    /// The menu under the back chevron: the conversations, then Bishop's own
+    /// switchboard. Alex: "when pressed back it should show a menu. in menu put
+    /// setting button that will navigate to settings window".
+    @ViewBuilder private var menuItems: some View {
+        Button { request = MenuRequest(screen: .settings) } label: {
+            Label("Settings", systemImage: "gearshape")
+        }
+        Divider()
+        // The conversations sit in a submenu of their own: a dozen of them in the
+        // same list as the app's controls is a wall the eye has to scan for
+        // Settings, and they are what the menu is usually opened for.
+        Menu {
+            if api.sessions.isEmpty { Text("Nothing saved yet") }
+            ForEach(api.sessions) { s in
+                Button(s.title) { request = MenuRequest(session: s.id) }
+            }
+        } label: { Label("Conversations", systemImage: "bubble.left.and.bubble.right") }
+        Button { request = MenuRequest(newChat: true) } label: {
+            Label("New chat", systemImage: "square.and.pencil")
+        }
+        if api.busy {
+            Button { request = MenuRequest(stop: true) } label: { Label("Stop the answer", systemImage: "stop.fill") }
+        }
+        Button { request = MenuRequest(speech: true) } label: {
+            Label("Stop speaking", systemImage: "speaker.slash")
+        }
+        // No counters row here on purpose: the strip under the transcript is
+        // already showing those two lines, and in the menu they wrapped onto
+        // theirs and made the panel a wall. A menu repeats nothing it can point at.
+        if api.connected {
+            Divider()
+            Button { request = MenuRequest(restart: true) } label: {
+                Label("Restart the server", systemImage: "arrow.clockwise")
+            }
+        }
+    }
+
     // MARK: transcript
 
     private var transcript: some View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 10) {
-                    if !api.connected {
-                        ConnectBanner(api: api)
-                    }
                     ForEach(events) { e in
                         EventRow(event: e, api: api, fullPicture: $fullPicture)
                             .id(e.id)
+                    }
+                    if !api.connected {
+                        // The connect form is NOT here any more: a card in the
+                        // transcript is in the path of the answer and, worse, it
+                        // was the app's only way into the address - unreachable
+                        // the moment a stale address stopped answering. It lives
+                        // in Settings (menu > Settings) as of 2026-10-15; this is
+                        // a signpost to it, and it draws NOTHING while the app is
+                        // connected.
+                        NotConnectedRow(api: api)
                     }
                     Color.clear.frame(height: 1).id("bottom")
                 }
@@ -447,11 +505,20 @@ struct ChatView: View {
                             .foregroundStyle(.gray.opacity(0.75))
                     }
                 } else {
-                    Text("no call yet").bold(); Spacer()
+                    // No Spacer here: this row is inside a bar whose parent lets
+                    // it grow, and a Spacer made it expand to fill the screen -
+                    // "no call yet" floated in the middle of an empty chat. The
+                    // chevron branch above wants a Spacer (it pushes the chevron
+                    // right), this one has nothing to push.
+                    Text("no call yet").bold()
                 }
             }
             .font(.system(size: 11, design: .monospaced))
             .foregroundStyle(.gray)
+            // A leading frame, because the bar's stack centres what it gets: the
+            // figures read as a left-hand margin (Alex's layout), and without
+            // this the two-line report floats to the middle of the screen.
+            .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 6).padding(.bottom, 4)
         }
         .buttonStyle(.plain)
@@ -672,6 +739,19 @@ struct ChatView: View {
         await api.newChat()
         events = []
         events = [ChatEvent(kind: .info, text: "New conversation.")]
+    }
+
+    /// Do ONE thing a menu row asked for. A menu is already gone by the time this
+    /// runs, so nothing here can be cancelled by the dismissal - and the request is
+    /// cleared before the work starts (in the body's onChange), so a second tap is
+    /// a second run rather than a repeat of the first.
+    private func carry(_ r: MenuRequest) async {
+        if let s = r.screen { path.append(s) }
+        if r.newChat { await newChat() }
+        if let id = r.session { await open(id) }
+        if r.stop { stop() }
+        if r.speech { await api.stopSpeech() }
+        if r.restart { await api.restartServer() }
     }
 
     private func open(_ id: String) async {
@@ -1503,33 +1583,34 @@ struct PictureView: View {
     }
 }
 
-/// Shown when the Mac does not answer: the address and the token, nothing else.
-struct ConnectBanner: View {
+/// The one row the transcript still owns in the connect story: a signpost, drawn
+/// ONLY while the Mac is not answering.
+///
+/// The form it replaces (ConnectBanner: address field, token field, Connect) was
+/// wrong twice over. It sat INSIDE the transcript, where it pushed the answer down
+/// and had to be scrolled past, and it was the app's ONLY way to reach the address
+/// - so once a stale address stopped answering, the one screen that could have
+/// fixed it was the one screen the app could not reach, and the card's own
+/// "Connect" button only ever retried the same stale address. Settings (menu >
+/// Settings) now owns all of it; this row says so, and names the address being
+/// tried, because "not connected" without an address says nothing about which Mac
+/// or which lease is at fault.
+struct NotConnectedRow: View {
     @ObservedObject var api: BishopAPI
-    @State private var host = BishopAPI.DEFAULT_HOST   // the address, so only the token is typed
-    @State private var token = ""
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Not connected").font(.headline)
-            Text("The Mac runs webui.py; the token is in ~/.bishop_web_token on it.")
-                .font(.caption).foregroundStyle(.gray)
-            TextField("192.168.2.12:8420", text: $host).textFieldStyle(.roundedBorder)
-                .keyboardType(.URL).autocorrectionDisabled()
-            TextField("token", text: $token).textFieldStyle(.roundedBorder)
-                .autocorrectionDisabled()
-            Button("Connect") {
-                api.host = host; api.token = token
-                Task { await api.connect() }
-            }.buttonStyle(.borderedProminent)
-            if !api.lastError.isEmpty {
-                Text(api.lastError).font(.caption2).foregroundStyle(.orange)
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 6) {
+                Image(systemName: "wifi.exclamationmark")
+                Text("Not connected").fontWeight(.semibold)
+                Spacer()
             }
+            Text("Trying \(api.host.isEmpty ? BishopAPI.DEFAULT_HOST : api.host)")
+            Text("Open the menu (top left) and then Settings to set the Mac's address and the token.")
         }
-        .padding(12)
-        .background(Color(white: 0.12))
-        .clipShape(RoundedRectangle(cornerRadius: 16))
-        .onAppear { host = api.host; token = api.token }
+        .font(.system(size: 12))
+        .foregroundStyle(.gray)
+        .padding(.horizontal, 14)
     }
 }
 
