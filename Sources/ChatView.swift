@@ -17,6 +17,7 @@ struct ChatView: View {
     @State private var fullPicture: String?
     @State private var path: [ChatView.Screen] = []   // what the back menu pushed
     @State private var request: MenuRequest?  // what a menu row asked for; see carry(_:)
+    @State private var sidebar = false        // the drawer: chats, New chat, Settings
     @State private var mine: UUID?            // a just-sent message, to be put at the top
     @State private var content: CGFloat = 0   // how tall the transcript is
     @State private var viewport: CGFloat = 0  // ...and how much room it has
@@ -34,28 +35,39 @@ struct ChatView: View {
         // impossible to see; only a direct child can be pinned like this and get
         // the scroll edge effect (the frosted band under a bar).
         // The stack wraps the WHOLE screen, bars included: Settings is pushed onto
-        // THIS stack, and the header (which holds the menu that asks for it) hangs
-        // off the scroll view through BarsOverTranscript - a stack around the
-        // transcript alone would leave that header outside it.
+        // THIS stack, and the header (which holds the drawer button) hangs off the
+        // scroll view through BarsOverTranscript - a stack around the transcript
+        // alone would leave that header outside it.
         //
-        // The push is driven by `path`, not by a NavigationLink in the menu. A
-        // NavigationLink inside this Menu highlights its row, closes the menu and
-        // pushes NOTHING (watched on the simulator, twice) - a menu row can only
-        // report where to go, and the path is the state that actually goes there.
-        NavigationStack(path: $path) {
-            transcript
-                .modifier(BarsOverTranscript(glass: glassBar, header: header, bottom: bottomBars))
-                .navigationDestination(for: Screen.self) { s in
-                    switch s {
-                    case .settings: SettingsView(api: api)
+        // The push is driven by `path`, not by a NavigationLink in the drawer: a
+        // NavigationLink inside a list of rows highlights its row and pushes
+        // NOTHING (watched on the simulator, twice) - a row can only report where
+        // to go, and the path is the state that actually goes there.
+        ZStack {
+            NavigationStack(path: $path) {
+                transcript
+                    .modifier(BarsOverTranscript(glass: glassBar, header: header, bottom: bottomBars))
+                    .navigationDestination(for: Screen.self) { s in
+                        switch s {
+                        case .settings: SettingsView(api: api)
+                        }
                     }
-                }
+            }
+            // The drawer sits OVER the whole screen and OUTSIDE the stack: it
+            // belongs to the chat it acts on, and a pushed screen cannot reach the
+            // chat (see `drawer`).
+            drawer
         }
         .background(Color.black)
         .preferredColorScheme(.dark)
         .onChange(of: request) { _, r in
             guard let r else { return }
             request = nil                    // one tap, one request
+            // The panel is SLID, not popped: an overlay inside an `if` is not
+            // animated unless the state change itself is animated, and a drawer
+            // that appears in one frame reads as a redraw rather than as a panel
+            // coming out.
+            withAnimation(.snappy(duration: 0.28)) { sidebar = false }
             Task { await carry(r) }
         }
             .task {
@@ -94,20 +106,19 @@ struct ChatView: View {
 
     private var header: some View {
         HStack(spacing: 12) {
-            // Back: a menu, not the session list. Alex, on the phone: "when
-            // pressed back it should show a menu. in menu put setting button that
-            // will navigate to settings window".
-            //
-            Menu { menuItems } label: {
-                Image(systemName: "chevron.left").font(.system(size: 22, weight: .semibold))
+            // Back: the DRAWER, not a menu. Alex, with the Gemini app on screen:
+            // "change the back button on ios works, it show menu, but many is
+            // wrong style, it should navigate back to another window. That window
+            // should have New chat, settings and list of chats".
+            Button { open(true) } label: {
+                Image(systemName: "line.3.horizontal").font(.system(size: 18, weight: .medium))
                     .frame(width: 34, height: 34)
                     .contentShape(.rect)
             }
-            .buttonStyle(.plain)
-            .buttonBorderShape(.circle)
-            .accessibilityLabel("Back, menu")
+            .buttonBorderShape(.circle).barButton(glassBar)
+            .accessibilityLabel("Chats, new chat and settings")
 
-            // The title is plain, like the chevron: the menu it names is one tap
+            // The title is plain, like the button: the drawer it names is one tap
             // away on the left now, so the capsule became a caption with no job.
             Text(title).font(.headline).foregroundStyle(.white).lineLimit(1)
                 .frame(maxWidth: .infinity, minHeight: 34)
@@ -205,63 +216,165 @@ struct ChatView: View {
         api.sessions.first { $0.id == api.session }?.title ?? (api.session.isEmpty ? "Bishop" : api.session)
     }
 
-    // MARK: the back menu
+    // MARK: the drawer
 
-    /// What a menu row asked for. A menu is dismissed the instant one of its
-    /// buttons is chosen, so no row may start async work itself - it would be
-    /// cancelled with the menu. Every button therefore only sets this value, and
-    /// the one task below carries the request out. `nil` means nothing pending.
+    /// What a row of the drawer asked for. A row is INERT: it records the request
+    /// and the one task in the body carries it out (and closes the drawer). That
+    /// keeps each row one line and, more to the point, keeps the DECIDING in one
+    /// place - what an id means (open that chat) is written once, instead of at
+    /// every row that can produce one.
     struct MenuRequest: Equatable {
         var screen: Screen?               // push a screen (Settings)
         var newChat = false
-        var session: String?
-        var stop = false
-        var speech = false
-        var restart = false
+        var session: String?              // open this chat (empty id = the unsaved one)
     }
 
-    /// A screen the chat can push. An enum rather than a bare Bool because the
-    /// stack's path is the state that drives it: `NavigationLink` inside the
-    /// chevron's Menu highlights the row and pushes NOTHING (verified on the
-    /// simulator - the menu closes and the chat stays), so the menu reports the
-    /// destination and the path does the pushing, which cannot silently fail.
+    /// A screen the chat can push. The stack's path is what pushes it: a
+    /// `NavigationLink` inside a menu of rows highlights its row and pushes
+    /// NOTHING (verified on the simulator, twice), and this cannot silently fail.
     enum Screen: Hashable { case settings }
 
-    /// The menu under the back chevron: the conversations, then Bishop's own
-    /// switchboard. Alex: "when pressed back it should show a menu. in menu put
-    /// setting button that will navigate to settings window".
-    @ViewBuilder private var menuItems: some View {
-        Button { request = MenuRequest(screen: .settings) } label: {
-            Label("Settings", systemImage: "gearshape")
-        }
-        Divider()
-        // The conversations sit in a submenu of their own: a dozen of them in the
-        // same list as the app's controls is a wall the eye has to scan for
-        // Settings, and they are what the menu is usually opened for.
-        Menu {
-            if api.sessions.isEmpty { Text("Nothing saved yet") }
-            ForEach(api.sessions) { s in
-                Button(s.title) { request = MenuRequest(session: s.id) }
+    /// The drawer: the chats, then the app's own furniture. This is what the
+    /// reference app (Gemini) opens from the button at the top left, and it
+    /// replaced a `Menu` under a chevron - a MENU is the wrong widget for a LIST
+    /// (a dozen chats in a popover hang off the button, in the middle of the
+    /// screen, in a panel sized by its own contents).
+    ///
+    /// A hand-rolled overlay, not `toolbar(.principal)` + NavigationSplitView -
+    /// both of those were tried first and neither works here. `.principal` centres
+    /// its item against the WHOLE bar and ignores what precedes it, so a leading
+    /// button simply sat on top of the title (watched on the simulator), and a
+    /// NavigationSplitView gives up the glass header and the scroll-into-the-bars
+    /// effect entirely. The overlay keeps all of that for about the same code.
+    @ViewBuilder private var drawer: some View {
+        if sidebar {
+            ZStack(alignment: .leading) {
+                // The chat stays readable through a scrim rather than being pushed
+                // aside: nothing is asked of the transcript's layout, which is
+                // where the follow/scroll logic lives.
+                Color.black.opacity(0.55)
+                    .ignoresSafeArea()
+                    .onTapGesture { open(false) }
+                panel
+                    // A strip of the chat stays visible on the right, like the
+                    // reference: enough for a long title, and the panel reads as a
+                    // layer over the chat rather than as another screen.
+                    .frame(width: drawerWidth)
+                    .frame(maxHeight: .infinity, alignment: .top)
+                    // The panel's own surface, ignoring the safe area so its black
+                    // reaches both screen edges; the ROWS stay inside the safe area,
+                    // which is what keeps the status row off the home indicator.
+                    .background(Color.black.ignoresSafeArea())
+                    .overlay(alignment: .trailing) {
+                        Rectangle().fill(.white.opacity(0.12)).frame(width: 1)
+                    }
+                    .transition(.move(edge: .leading))
             }
-        } label: { Label("Conversations", systemImage: "bubble.left.and.bubble.right") }
-        Button { request = MenuRequest(newChat: true) } label: {
-            Label("New chat", systemImage: "square.and.pencil")
+            // Its own layer, over the chat alone: the bars and the composer are
+            // behind it and stay put while the panel slides.
+            .transition(.opacity)
+            .zIndex(1)
         }
-        if api.busy {
-            Button { request = MenuRequest(stop: true) } label: { Label("Stop the answer", systemImage: "stop.fill") }
-        }
-        Button { request = MenuRequest(speech: true) } label: {
-            Label("Stop speaking", systemImage: "speaker.slash")
-        }
-        // No counters row here on purpose: the strip under the transcript is
-        // already showing those two lines, and in the menu they wrapped onto
-        // theirs and made the panel a wall. A menu repeats nothing it can point at.
-        if api.connected {
-            Divider()
-            Button { request = MenuRequest(restart: true) } label: {
-                Label("Restart the server", systemImage: "arrow.clockwise")
+    }
+
+    /// How much of the screen the drawer takes - not a constant, because in
+    /// landscape 0.86 of the width is very nearly the whole screen for a single
+    /// column of rows.
+    private var drawerWidth: CGFloat {
+        min(UIScreen.main.bounds.width * 0.86, 380)
+    }
+
+    /// Show or hide the drawer, as an ANIMATION. An overlay behind an `if` does not
+    /// animate by itself - without this the panel appears and vanishes in a single
+    /// frame, which reads as the screen being redrawn rather than as a drawer.
+    private func open(_ want: Bool) {
+        withAnimation(.snappy(duration: 0.28)) { sidebar = want }
+    }
+
+    private var panel: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 10) {
+                Text("Bishop").font(.title3.weight(.semibold))
+                Spacer()
+                drawerRow("Close", "xmark", action: { open(false) })
             }
+            .padding(.leading, 23).padding(.trailing, 7)
+            .padding(.top, 14).padding(.bottom, 10)
+
+            drawerRow("New chat", "square.and.pencil",
+                      action: { request = MenuRequest(newChat: true) }, selected: true)
+            drawerRow("Settings", "gearshape", action: { request = MenuRequest(screen: .settings) })
+
+            // The chat list is the part that scrolls: a hundred conversations must
+            // not push the rows above off the top of the panel.
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    drawerCaption("Chats")
+                    // The UNSAVED chat comes first when there is one on screen. The
+                    // app shows a chat the server has not written down yet (or an
+                    // empty new one), and a list that omitted it would read as "my
+                    // conversation is gone" while it is right there behind the
+                    // panel. Alex's ask is a list of chats, and the one being read
+                    // is one of them.
+                    if api.session.isEmpty {
+                        drawerChat(id: "", title: events.isEmpty ? "New chat" : "This chat", selected: true)
+                    }
+                    ForEach(api.sessions) { s in
+                        drawerChat(id: s.id, title: s.title, selected: s.id == api.session)
+                    }
+                    if api.sessions.isEmpty && !api.session.isEmpty {
+                        Text("Nothing saved yet").font(.footnote).foregroundStyle(.secondary)
+                            .padding(.horizontal, 16).padding(.vertical, 8)
+                    }
+                }
+                .padding(.bottom, 8)
+            }
+
+            // The one row that talks about the Mac instead of the app's own
+            // screens, and the reason it is here: the drawer is what a reader opens
+            // when the app seems dead, so the state has to be readable without
+            // going anywhere. The address is on the Settings screen above it.
+            HStack(spacing: 8) {
+                Circle().fill(api.connected ? Color.green : Color.orange).frame(width: 8, height: 8)
+                Text(api.connected ? "Connected" : "Not connected").font(.footnote)
+                Spacer()
+                Text(api.host).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+            }
+            .padding(.horizontal, 16).padding(.vertical, 10)
+            .overlay(alignment: .top) { Rectangle().fill(.white.opacity(0.12)).frame(height: 1) }
         }
+    }
+
+    /// One row of the drawer. Every row of the panel is one of these - the two
+    /// fixed ones and every chat - so the hit area, the highlight and the leading
+    /// margin are written once. A chat has no symbol: an icon on every line of a
+    /// list of conversations is wallpaper, while "New chat" and "Settings" need
+    /// one to be told apart at a glance.
+    private func drawerRow(_ title: String, _ symbol: String, action: @escaping () -> Void,
+                           selected: Bool = false) -> some View {
+        Button(action: action) {
+            HStack(spacing: 12) {
+                if !symbol.isEmpty { Image(systemName: symbol).font(.system(size: 16)).frame(width: 22) }
+                Text(title).font(.system(size: 16)).lineLimit(1)
+                Spacer()
+            }
+            .padding(.horizontal, 16).padding(.vertical, 13)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(.rect)
+            .background(selected ? Color.white.opacity(0.12) : .clear)
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(.white)
+    }
+
+    /// One chat in the list: the same row, named by the chat it opens.
+    private func drawerChat(id: String, title: String, selected: Bool) -> some View {
+        drawerRow(title, "", action: { request = MenuRequest(session: id) }, selected: selected)
+    }
+
+    private func drawerCaption(_ text: String) -> some View {
+        Text(text).font(.footnote).foregroundStyle(.secondary)
+            .padding(.horizontal, 16).padding(.top, 14).padding(.bottom, 4)
     }
 
     // MARK: transcript
@@ -741,17 +854,16 @@ struct ChatView: View {
         events = [ChatEvent(kind: .info, text: "New conversation.")]
     }
 
-    /// Do ONE thing a menu row asked for. A menu is already gone by the time this
-    /// runs, so nothing here can be cancelled by the dismissal - and the request is
-    /// cleared before the work starts (in the body's onChange), so a second tap is
-    /// a second run rather than a repeat of the first.
+    /// Do ONE thing a drawer row asked for. The request is cleared before the work
+    /// starts (in the body's onChange), so a second tap is a second run rather than
+    /// a repeat of the first. An empty session id is the unsaved chat already on
+    /// screen - there is nothing to load for it, only an empty transcript.
     private func carry(_ r: MenuRequest) async {
         if let s = r.screen { path.append(s) }
         if r.newChat { await newChat() }
-        if let id = r.session { await open(id) }
-        if r.stop { stop() }
-        if r.speech { await api.stopSpeech() }
-        if r.restart { await api.restartServer() }
+        if let id = r.session {
+            if id.isEmpty { await newChat() } else { await open(id) }
+        }
     }
 
     private func open(_ id: String) async {
