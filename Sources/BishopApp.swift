@@ -10,6 +10,6 @@ import SwiftUI
 @main
 struct BishopApp: App {
     var body: some Scene {
-        WindowGroup { ChatView() }
+        WindowGroup { ChatRoom() }
     }
 }

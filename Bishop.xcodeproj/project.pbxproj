@@ -7,6 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		04578A37991A7E83FF389E98 /* ChatFeed.swift in Sources */ = {isa = PBXBuildFile; fileRef = ACDAAB2575B213704AC9229B /* ChatFeed.swift */; };
+		3A7F3FFC05D3E1609F48A397 /* ChatRoom.swift in Sources */ = {isa = PBXBuildFile; fileRef = EFFC2255CDE55C7D8AC63D57 /* ChatRoom.swift */; };
 		46D93FA545C430789B73F2C2 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 07C96F743FB30EE5CC7B85F3 /* SettingsView.swift */; };
 		54D147263B93613307370F1C /* BishopApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 77A16C71A885F0D29324B257 /* BishopApp.swift */; };
 		6C9B07455E1C9B2256ED8E00 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 9F7671721F5BB6BF4B8827A4 /* Assets.xcassets */; };
@@ -23,6 +25,8 @@
 		77A16C71A885F0D29324B257 /* BishopApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BishopApp.swift; sourceTree = "<group>"; };
 		7FEC494FF232A248E7256004 /* StreamClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StreamClient.swift; sourceTree = "<group>"; };
 		9F7671721F5BB6BF4B8827A4 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		ACDAAB2575B213704AC9229B /* ChatFeed.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatFeed.swift; sourceTree = "<group>"; };
+		EFFC2255CDE55C7D8AC63D57 /* ChatRoom.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatRoom.swift; sourceTree = "<group>"; };
 		F47C878F47EA2A7B724EBDC6 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -49,6 +53,8 @@
 				9F7671721F5BB6BF4B8827A4 /* Assets.xcassets */,
 				6730706CF0F861E13C2C29F3 /* BishopAPI.swift */,
 				77A16C71A885F0D29324B257 /* BishopApp.swift */,
+				ACDAAB2575B213704AC9229B /* ChatFeed.swift */,
+				EFFC2255CDE55C7D8AC63D57 /* ChatRoom.swift */,
 				145647177182283C147488DA /* ChatView.swift */,
 				F47C878F47EA2A7B724EBDC6 /* Info.plist */,
 				07C96F743FB30EE5CC7B85F3 /* SettingsView.swift */,
@@ -130,6 +136,8 @@
 			files = (
 				909E72EB665780FF8F806786 /* BishopAPI.swift in Sources */,
 				54D147263B93613307370F1C /* BishopApp.swift in Sources */,
+				04578A37991A7E83FF389E98 /* ChatFeed.swift in Sources */,
+				3A7F3FFC05D3E1609F48A397 /* ChatRoom.swift in Sources */,
 				979FF8F16C509DD1D0C4B66A /* ChatView.swift in Sources */,
 				46D93FA545C430789B73F2C2 /* SettingsView.swift in Sources */,
 				D187543EEEBF13D29BD15966 /* StreamClient.swift in Sources */,
