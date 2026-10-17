@@ -26,21 +26,23 @@ struct ChatView: View {
     @State private var placing = false        // a just-sent message is on its way to the top
     @State private var geo = ScrollGeo()      // the scroll's raw numbers, for the debug strip
     @FocusState private var typing: Bool      // the composer's focus, so send() can drop the keyboard
-    /// The clock the two LIVE figures on screen are read against: a running
-    /// command's elapsed time, in its box, and the thinking label's count. A
-    /// stream event is not a clock - a command that prints nothing for a minute,
-    /// or a thought that reasons without emitting, would otherwise leave a still
-    /// row on a screen that looks stalled. This tick draws nothing of its own; it
-    /// only makes the views that read a Date() re-evaluate, once a second.
-    ///
-    /// The publisher is STATIC because it is attached to the rows in the body
-    /// below: one built there would be a new publisher on every redraw, and the
-    /// timer would be restarted (and its connection dropped) as often as the
-    /// transcript is redrawn - which, with the tick itself redrawing it, is once
-    /// a second. One publisher for the life of the process, which is what a clock
-    /// is.
-    private static let tick = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
-    @State private var now = Date()
+    // There is deliberately NO clock in this view. The two live figures on screen
+    // - a running command's elapsed seconds and the thinking label's count - are
+    // drawn by EditChip's own box and by ThoughtLabel, each of which owns its timer
+    // as an ordinary @State. This view must not hold the time: a `now` kept here and
+    // handed down, re-published every second, was ONE SECOND OF FLICKER. It is
+    // this view's own state, so its change re-evaluates the whole body - every
+    // row, the header, both bars, their preferences, the transcript's layout -
+    // and Alex saw exactly that on the phone: the screen blinking once a second,
+    // the conversation menu jumping up every second, the scroll jumping with it.
+    // The scroll was the worst of it: a re-layout reports new geometry, and the
+    // follow logic reads geometry on EVERY change, so once a second the
+    // transcript re-decided where it was and scrolled itself. A row that owns its
+    // own timer redraws only itself, and none of that happens.
+    //
+    // (A publisher here was a dead end for a second reason: a row cannot own a
+    // repeating publisher from inside a ForEach - "Unable to extract a repeating
+    // publisher" - which is why the time was hoisted up here at all.)
 
     var body: some View {
         // The bars hang off the SCROLL VIEW itself, via safeAreaBar - see
@@ -285,18 +287,15 @@ struct ChatView: View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 10) {
-                    // The tick is attached HERE, once, around every row: an
-                    // individual row cannot own a repeating publisher of its own
-                    // from inside a ForEach (SwiftUI refuses to extract it). What
-                    // it drives is the `clockNow` the rows read, so a row that
-                    // shows elapsed time redraws every second and a row that
-                    // shows none draws nothing new.
+                    // The clock lives INSIDE the two views that show a live
+                    // figure (EditChip's clock, ThoughtLabel), never here: a value
+                    // published from this body would re-evaluate every row, the
+                    // bars and the transcript's layout once a second. See the
+                    // note where `tick` used to be.
                     ForEach(events) { e in
                         EventRow(event: e, api: api, fullPicture: $fullPicture)
                             .id(e.id)
                     }
-                    .environment(\.clockNow, now)
-                    .onReceive(ChatView.tick) { now = $0 }
                     if !api.connected {
                         // The connect form is NOT here any more: a card in the
                         // transcript is in the path of the answer and, worse, it
@@ -1026,8 +1025,13 @@ struct EventRow: View {
             // and the search are born folded, so a whole file - or 300 hits -
             // stays one tap away. The full call stays one tap further in.
             if let v = event.view, ToolView.describes(v) {
+                // `key` is the event's id: the clock that runs while a command is
+                // going lives in this view's own @State (elapsed/counting), and
+                // EditChip is a fresh view for each event - but the id makes that
+                // a fact rather than a hope, so a row cannot inherit the previous
+                // row's seconds if SwiftUI ever reuses the view's storage.
                 EditChip(view: v, raw: event.text, result: event.ok == false ? event.result : "",
-                         ok: event.ok, live: event.liveRows)
+                         ok: event.ok, live: event.liveRows).id(event.id)
             } else {
                 ToolRow(event: event)
             }
@@ -1035,7 +1039,7 @@ struct EventRow: View {
             // A tool result with no call above it to join. Folded, as before.
             if let v = event.view, v.kind == "ok", v.ok { EmptyView() }
             else if let v = event.view, ToolView.describes(v) {
-                EditChip(view: v, raw: "", result: event.ok == false ? event.text : "")
+                EditChip(view: v, raw: "", result: event.ok == false ? event.text : "").id(event.id)
             } else { Collapsible(summary: event.name, text: event.text, mono: true, tint: .gray) }
         case .output:
             // A command's output while it runs belongs to the row its call opened
@@ -1155,12 +1159,6 @@ struct ThoughtBlock: View {
     /// moment its duration would be (see ChatView.markWatched).
     var started = Date()
     @State private var expanded = false
-    /// The app's shared second, read HERE so the label can count while the thought
-    /// runs. Taking it from the Environment is what makes the tick redraw this row
-    /// - and only the rows that read it, since a view registers the dependency
-    /// itself. That is the whole reason the clock is handed down rather than
-    /// published by the client, which would redraw every row in the transcript.
-    @Environment(\.clockNow) private var now
     /// The tallest this block has ever been. It only ever goes up, and the block
     /// never renders shorter than it - see body.
     @State private var held: CGFloat = 0
@@ -1169,13 +1167,11 @@ struct ThoughtBlock: View {
     /// paragraph cannot take the screen away from the transcript.
     private static let maxBody: CGFloat = 180
 
-    private var label: String {
-        if running {
-            let s = Int(max(0, now.timeIntervalSince(started)))
-            return s >= 1 ? "thinking \(s)s" : "thinking..."
-        }
-        return secs > 0 ? "thought for \(secs)s" : "thought"
-    }
+    /// The label of a thought that is OVER: its duration if this app clocked one,
+    /// "thought" if not. While it runs, the label is ThoughtLabel - a view of its
+    /// own, because the count it shows is that view's own state (see the note
+    /// where ChatView's clock used to be, "NO clock in this view").
+    private var label: String { secs > 0 ? "thought for \(secs)s" : "thought" }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -1184,7 +1180,7 @@ struct ThoughtBlock: View {
             } label: {
                 HStack(spacing: 6) {
                     Text("▸").font(.caption2)      // the page's closed-fold marker
-                    Text(label).font(.caption)
+                    if running { ThoughtLabel(started: started) } else { Text(label).font(.caption) }
                 }.foregroundStyle(.gray)
             }
             if show {
@@ -1337,17 +1333,18 @@ struct EditChip: View {
     /// it shut when the command finishes.
     @State private var tapped: Bool? = nil
     @State private var showCall = false
-    /// When THIS app first drew the running command - a clock of our own, so its
-    /// elapsed time can be shown while it runs. It is not the row's arrival: a
-    /// call's view is re-sent with every delta, and one arriving while the command
-    /// is already going must not restart the count.
-    @State private var since: Date?
-    /// The app's shared second, read HERE so the box can count while the command
-    /// runs. Taking it from the Environment is what makes the tick redraw this row
-    /// - and only the rows that read it, since a view registers the dependency
-    /// itself. That is the whole reason the clock is handed down rather than
-    /// published by the client, which would redraw every row in the transcript.
-    @Environment(\.clockNow) private var now
+    /// The seconds this app has counted for the running command - the figure the
+    /// box wears while there is nobody to ask for one. It is THIS view's own state
+    /// on purpose, and where the clock lives: a figure handed down from ChatView
+    /// redrew the whole screen once a second (the note where ChatView's own clock
+    /// used to be - "NO clock in this view"), while a row that counts for itself
+    /// redraws nobody but itself. Started ONCE, when the box first draws a running
+    /// command - a call's view is re-sent with every delta and must not restart the
+    /// count (see startClock/tick).
+    @State private var elapsed = 0
+    /// Is the count running? A separate flag because the count is started OFF the
+    /// box's body: `elapsed` counts seconds, this says a clock is going.
+    @State private var counting = false
 
     private var read: Bool { view.kind == "read" }
     private var search: Bool { view.kind == "search" }
@@ -1368,13 +1365,13 @@ struct EditChip: View {
     /// one side of the box to the other when the exit code lands - only its
     /// source changes, and both are seconds.
     ///
-    /// Read through `now` rather than off a Date() directly: that is what makes
-    /// it move once a second (see ChatView.tick). A command printing a waiter (a
-    /// `sleep`, a long build) sends no event at all while it works, so this is the
-    /// only thing on screen that can say it is still going.
+    /// Read through `elapsed`, which this view counts for itself (see the clock
+    /// task on the box's body). A command printing a waiter (a `sleep`, a long
+    /// build) sends no event at all while it works, so this is the only thing on
+    /// screen that can say it is still going.
     private var ran: String {
-        guard shell, ok == nil, let since else { return "" }
-        return String(format: "%.0fs", max(0, now.timeIntervalSince(since)))
+        guard shell, ok == nil, counting else { return "" }
+        return "\(elapsed)s"
     }
     /// A command's lines: the LIVE output while it runs, the result's own once it
     /// has answered. `liveRows` is empty in every case but a running command, so
@@ -1392,9 +1389,23 @@ struct EditChip: View {
     /// Start the count for a command that is running, once. The row is born a call
     /// - the Mac's view says "Running" and, for a front end that draws the output
     /// as it arrives, `stream` - and the clock is what turns that word into a
-    /// figure that keeps moving.
+    /// figure that keeps moving. `counting` is the once: a call's view is re-sent
+    /// with every delta, and one arriving while the command is already going must
+    /// not restart the count.
     private func startClock() {
-        if streaming && since == nil { since = Date() }
+        if streaming, !counting { counting = true; elapsed = 0 }
+    }
+    /// One second a turn, in this view's own state - nobody else's figure, so
+    /// nobody else redraws. The body does not end, so the loop IS the clock: it
+    /// runs while the box is on screen (a running command's body) and dies with
+    /// it, because a Task.sleep that is cancelled by the view going away throws
+    /// out of the loop.
+    private func tick() async {
+        for _ in 0..<Int.max {
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
+            if Task.isCancelled { return }
+            elapsed += 1
+        }
     }
     /// What rides in the BOX: a command's own figure - its duration once it has
     /// answered, this app's count while it is still going (`ran`). A read carries
@@ -1546,14 +1557,6 @@ struct EditChip: View {
                             }
                         }
                     }
-                    // The command's clock, started when the row first says it is a
-                    // RUNNING command. onAppear is not enough on its own: a row
-                    // rebuilt for a call that arrived with no view, or with the
-                    // Mac's own view before `stream` was set, would start its
-                    // count late - and one arriving for a command ALREADY going
-                    // must not restart it, which is what the nil check is for.
-                    .onAppear { startClock() }
-                    .onChange(of: streaming) { _, _ in startClock() }
                     .clipShape(RoundedRectangle(cornerRadius: 6))
                     .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Color(white: 0.16)))
                     .onTapGesture { showCall.toggle() }   // a second tap shows how it was called
@@ -1574,6 +1577,15 @@ struct EditChip: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        // THE CHIP'S CLOCK, and it hangs here, on the whole chip, not on the
+        // output below: the figure it drives is in the chip's own HEADER, and a
+        // running command a reader has folded shut still wears it. (`task`, not a
+        // publisher, because a row cannot own a repeating publisher inside a
+        // ForEach; the task is cancelled with the view, so there is nothing to
+        // invalidate when the row scrolls away.)
+        .onAppear { startClock() }
+        .onChange(of: streaming) { _, _ in startClock() }
+        .task { await tick() }
     }
 
     /// The +/- marker in place of a line-number column: the column is a fifth of a
@@ -1708,20 +1720,42 @@ struct NotConnectedRow: View {
     }
 }
 
-// MARK: - where the transcript sits
+// MARK: - the two figures that move by themselves
 
-/// The app's second, handed down the view tree: a row that shows elapsed time
-/// reads it and SwiftUI, seeing the value change, redraws THAT row - a row's own
-/// `@Environment` property is what registers the dependency. The publisher that
-/// produces it is attached once, to the rows in the transcript (ChatView.tick).
-private struct ClockNowKey: EnvironmentKey { static let defaultValue = Date() }
+/// The label of a RUNNING thought: "thinking 12s", with the second counted by
+/// this view for itself - and THAT is the whole reason it is a view of its own.
+///
+/// It carries no text, no fold and no height; it is one label whose clock is
+/// internal. A figure that moves has to be that view's own @State, because the
+/// alternative - the time kept at the top of the screen and handed down - was one
+/// second of flicker on the phone: it is ChatView's state, so every second
+/// re-evaluated the whole body, all the rows, the bars and the transcript's
+/// layout, and the conversation menu and the scroll jumped with it. The cost of
+/// keeping it here is one row's label re-laid-out per second; the cost of hoisting
+/// it was the screen. See the note where ChatView's own clock used to be.
+///
+/// `.task` is the clock, and its lifetime is the right one by construction: the
+/// view exists only while the thought is running, so the task is started with it
+/// and cancelled when the fold closes - no flag, no publisher, nothing to
+/// invalidate.
+private struct ThoughtLabel: View {
+    let started: Date
+    @State private var secs = 0
 
-extension EnvironmentValues {
-    var clockNow: Date {
-        get { self[ClockNowKey.self] }
-        set { self[ClockNowKey.self] = newValue }
+    var body: some View {
+        Text(secs >= 1 ? "thinking \(secs)s" : "thinking...")
+            .font(.caption)
+            .task {
+                while !Task.isCancelled {
+                    try? await Task.sleep(nanoseconds: 1_000_000_000)
+                    if Task.isCancelled { return }
+                    secs = Int(max(0, Date().timeIntervalSince(started)))
+                }
+            }
     }
 }
+
+// MARK: - where the transcript sits
 
 /// Two facts about the transcript's own scroll, both straight from the OS.
 ///
