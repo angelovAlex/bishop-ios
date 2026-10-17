@@ -192,13 +192,4 @@ final class ChatStore: ObservableObject {
     /// the answer, and the ROOM reads it there and writes it here, so both the
     /// menu's list and this flag move on the same poll.
     @Published var saved = false
-    /// What is typed in the composer but not sent, and the pictures picked with it.
-    /// HERE rather than @State in ChatView, and that is not tidiness: the menu is a
-    /// screen pushed OVER the chat, and a screen in a navigation stack is DESTROYED
-    /// while another is on top of it - so a draft in ChatView's own state came back
-    /// empty on returning (Alex: "it erases input field, that should not happen").
-    /// The composer writes into these, and leaving the chat does not touch them;
-    /// only opening a DIFFERENT chat clears them.
-    @Published var draft = ""
-    @Published var attachments: [(path: String, name: String)] = []
 }

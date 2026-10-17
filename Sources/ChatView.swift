@@ -10,14 +10,12 @@ struct ChatView: View {
     @ObservedObject private var api: BishopAPI
     @ObservedObject private var events: EventFeed
     @ObservedObject private var chat: ChatStore
-    /// Show the chat menu. The menu is a screen pushed OVER this one - which is what
-    /// makes the swipe from the left edge land back here - so this view does not own
-    /// it and cannot draw it; the room pushes it.
-    let menu: () -> Void
 
     @State private var showStats = false
     @State private var showLevels = false    // the effort chip's popover
     @State private var fullPicture: String?
+    @State private var draft = ""
+    @State private var attachments: [(path: String, name: String)] = []
     @State private var picker: [PhotosPickerItem] = []
     @State private var mine: UUID?            // a just-sent message, to be put at the top
     @State private var content: CGFloat = 0   // how tall the transcript is
@@ -29,11 +27,10 @@ struct ChatView: View {
     @State private var geo = ScrollGeo()      // the scroll's raw numbers, for the debug strip
     @FocusState private var typing: Bool      // the composer's focus, so send() can drop the keyboard
 
-    init(api: BishopAPI, events: EventFeed, chat: ChatStore, menu: @escaping () -> Void) {
+    init(api: BishopAPI, events: EventFeed, chat: ChatStore) {
         self.api = api
         self.events = events
         self.chat = chat
-        self.menu = menu
     }
 
     var body: some View {
@@ -51,16 +48,14 @@ struct ChatView: View {
             .navigationTitle(chat.title)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                // Alex: "3. keep it as it is now" - the pencil keeps its one job,
-                // and the job is MENU now rather than "clear this chat": the menu it
-                // opens holds New chat, Settings and the chats, exactly like the
-                // reference's own top-left button. The chat stays where it is behind
-                // it, so coming back finds it as it was, draft included.
-                ToolbarItem(placement: .topBarLeading) {
-                    Button(action: menu) {
+                // Alex: "3. keep it as it is now". The pencil stays and keeps its
+                // one job - NEW CHAT (the same screen clears, no second transcript
+                // pushed on top) - rather than becoming a second way into the menu:
+                // the menu is one swipe or one tap on the back button away.
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button { Task { await newChat() } } label: {
                         Image(systemName: "square.and.pencil")
                     }
-                    .accessibilityLabel("Chats, new chat and settings")
                 }
             }
             .background(Color.black)
@@ -497,15 +492,15 @@ struct ChatView: View {
 
     private var composer: some View {
         VStack(spacing: 6) {
-            if !chat.attachments.isEmpty {
+            if !attachments.isEmpty {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 8) {
-                        ForEach(chat.attachments, id: \.path) { a in
+                        ForEach(attachments, id: \.path) { a in
                             AsyncImage(url: api.imageURL(a.path)) { $0.resizable().scaledToFill() }
                                 placeholder: { Color.gray }
                                 .frame(height: 54).frame(width: 54).clipShape(RoundedRectangle(cornerRadius: 12))
                                 .overlay(alignment: .topTrailing) {
-                                    Button { chat.attachments.removeAll { $0.path == a.path } } label: {
+                                    Button { attachments.removeAll { $0.path == a.path } } label: {
                                         Image(systemName: "xmark.circle.fill").foregroundStyle(.white, .gray)
                                     }.padding(2)
                                 }
@@ -522,7 +517,7 @@ struct ChatView: View {
             // row each, instead of the field being squeezed between the two
             // circles and the + riding up with it as the text wrapped.
             VStack(spacing: 4) {
-                TextField("Message Bishop", text: $chat.draft, axis: .vertical)
+                TextField("Message Bishop", text: $draft, axis: .vertical)
                     .lineLimit(1...6)
                     .textFieldStyle(.plain)
                     .padding(.vertical, 8)
@@ -552,7 +547,7 @@ struct ChatView: View {
                             .background(glassBar ? AnyShapeStyle(.clear) : AnyShapeStyle(.white))
                             .clipShape(.circle)
                     }
-                    .disabled(!api.busy && chat.draft.trimmingCharacters(in: .whitespaces).isEmpty && chat.attachments.isEmpty)
+                    .disabled(!api.busy && draft.trimmingCharacters(in: .whitespaces).isEmpty && attachments.isEmpty)
                 }
             }
             .padding(8)
@@ -576,11 +571,11 @@ struct ChatView: View {
     // MARK: actions
 
     private func send() {
-        let text = chat.draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        let paths = chat.attachments.map(\.path)
+        let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        let paths = attachments.map(\.path)
         guard !text.isEmpty || !paths.isEmpty else { return }
-        chat.draft = ""
-        chat.attachments = []
+        draft = ""
+        attachments = []
         dropKeyboard()          // the keyboard goes down and gives the answer the screen
         // The stream replays the turn, but the user's own line is not echoed
         // back mid-turn, so show it at once - same shape as the web page.
@@ -633,9 +628,29 @@ struct ChatView: View {
         for item in items {
             if let data = try? await item.loadTransferable(type: Data.self),
                let path = await api.upload(data) {
-                chat.attachments.append((path, "photo"))
+                attachments.append((path, "photo"))
             }
         }
+    }
+
+    /// The pencil in the bar: a NEW chat, in place (Alex: "3. keep it as it is now").
+    /// The bar says so at once rather than waiting for the Mac to mint an id - a
+    /// chat the server has not written down is exactly what "New chat" means, and
+    /// the room's poll replaces the name with the server's own the moment there is
+    /// one.
+    private func newChat() async {
+        await api.newChat()
+        events.rows = []
+        events.rows = [ChatEvent(kind: .info, text: "New conversation.")]
+        // The SERVER's session has to go with the transcript: /api/chat reset
+        // leaves `api.session` on the chat that just ended, and the room reads the
+        // open chat off it - so the bar would keep claiming the old chat until the
+        // next poll, and the menu would tick it.
+        api.session = ""
+        chat.id = ""
+        chat.saved = false
+        chat.title = "New chat"
+        await api.refresh()              // the session list (a new chat has no title yet)
     }
 
     /// What the bar reports about the Mac - nothing here loads a chat: WHICH chat
