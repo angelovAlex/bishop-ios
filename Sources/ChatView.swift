@@ -1272,10 +1272,11 @@ struct EventRow: View {
     }
 }
 
-/// A tool call with NO view of its own - everything but an edit, a read, a
-/// search and a command. It is drawn as the SAME chip as they are, one row with
-/// a tick and a name, because from here a tool call is a tool call: what makes
-/// the special kinds special is their CONTENT (a diff, a file, hits, a live
+/// An UNSTYLED tool - Alex's word (2026-10-18) for a tool call with no view of
+/// its own: everything but an edit, a read, a search and a command - which Alex
+/// calls the "styled" kinds. It is drawn as the SAME chip as they are, one row
+/// with a tick and a name, because from here a tool call is a tool call: what
+/// makes the styled kinds special is their CONTENT (a diff, a file, hits, a live
 /// output), never their frame. Alex asked for exactly this and drew the line
 /// himself: "I want to change only styling of tools that has no special style -
 /// don't change what already works."
@@ -1305,13 +1306,24 @@ struct ToolRow: View {
 
     /// What the row says happened: "Running" until the answer lands, then "Ran"
     /// or "Failed" - the words the Mac uses for a command, because this row is
-    /// its shape. The NAME is the box, the way a file's name is the box in an
-    /// edit's chip; a plain tool's name is all the call can say (its arguments are
-    /// JSON), so naming it twice would say nothing twice.
+    /// its shape. Alex, 2026-10-18: "run_shell shows type of execution, add it to
+    /// unstyled tools" - so the UNSTYLED label is the TYPE OF EXECUTION (how it
+    /// went), never the name of the thing acted on: nothing here acted on a file,
+    /// and "Ran" is true of a weather lookup as much as of a command.
+    ///
+    /// The NAME is the box, the way a file's name is the box in an edit's chip,
+    /// and it wears its PARENTHESES - `search_memory()` - because what the box
+    /// names is a function being called, which is what Alex asked for: "to
+    /// unstyled tools add also () at the end so we see it is a function."
     private var label: String {
         guard let ok else { return "Running" }
         return ok ? "Ran" : "Failed"
     }
+
+    /// The tool's name as a CALL: `search_memory()`. An unstyled tool has no file
+    /// and no command to name, so its own name is all the box can hold - and the
+    /// parentheses are what say "this was invoked" rather than "this is a thing".
+    private var call: String { event.name.isEmpty ? "" : event.name + "()" }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -1322,7 +1334,7 @@ struct ToolRow: View {
                         .foregroundStyle(ok ? ToolRow.green : ToolRow.red)
                 }
                 Text(label).font(.system(size: 14)).foregroundStyle(Color(white: 0.62))
-                Text(event.name)
+                Text(call)
                     .font(.system(size: 12.5, weight: .medium, design: .monospaced))
                     .foregroundStyle(Color(white: 0.92)).lineLimit(1)
                     .padding(.horizontal, 9).padding(.vertical, 4)
