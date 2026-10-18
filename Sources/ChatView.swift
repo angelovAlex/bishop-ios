@@ -350,14 +350,27 @@ struct ChatView: View {
     /// lid shipped: "make it a bit less opened bu chat, I mean chat goes a bit less
     /// to right" - 0.86 of a 402pt screen is 346, which left a 56pt (14%) strip of
     /// chat, and he wants more of the chat on show. 0.78 is 314, a 88pt (22%) strip:
-    /// the classic iOS drawer share, and still wide enough for the longest chat title
-    /// before it truncates.
+    /// the classic iOS drawer share.
+    ///
+    /// Then Alex, with that build in his hand: "text at left ends with ... before it
+    /// reaches chat. I want text to go bellow chat". A long chat title truncated at
+    /// 266pt of a 306pt panel, so ~40pt of dead space stood between the "..." and the
+    /// chat, which reads as a truncation that gave up too early. The trailing margin
+    /// was never the panel's to give: the chat's LID slides over the panel's right-hand
+    /// end, so most of that padding is covered anyway - the 16pt a row already carries
+    /// is enough, and the panel's last 12pt are taken back here so a title runs on
+    /// until the chat really is on top of it. Measured on his screenshot: the longest
+    /// title's ink ended at 263pt while the lid's edge stands at 314pt.
     ///
     /// Not a constant, because in landscape 0.86 of the width is very nearly the
     /// whole screen for a single column of rows.
     private var drawerWidth: CGFloat {
-        min(UIScreen.main.bounds.width * 0.78, 380)
+        min(UIScreen.main.bounds.width * 0.78, 380) - trailingSlack
     }
+
+    /// The strip of the panel the chat's lid covers, handed back to the rows: what
+    /// makes a long title run on until the chat is on top of it (see drawerWidth).
+    private let trailingSlack: CGFloat = 12
 
     /// Show or hide the drawer, as an ANIMATION, with the CHAT moving - the panel is
     /// under it and has nothing to animate of its own. This is the one place the
@@ -415,7 +428,7 @@ struct ChatView: View {
                 Spacer()
                 Text(api.host).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
             }
-            .padding(.horizontal, 16).padding(.vertical, 10)
+            .padding(.leading, 16).padding(.trailing, 6).padding(.vertical, 10)
             .overlay(alignment: .top) { Rectangle().fill(.white.opacity(0.12)).frame(height: 1) }
         }
     }
@@ -433,7 +446,7 @@ struct ChatView: View {
                 Text(title).font(.system(size: 16)).lineLimit(1)
                 Spacer()
             }
-            .padding(.horizontal, 16).padding(.vertical, 13)
+            .padding(.leading, 16).padding(.trailing, 6).padding(.vertical, 13)
             .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(.rect)
             .background(selected ? Color.white.opacity(0.12) : .clear)
