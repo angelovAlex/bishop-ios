@@ -1323,7 +1323,17 @@ struct ToolRow: View {
     /// The tool's name as a CALL: `search_memory()`. An unstyled tool has no file
     /// and no command to name, so its own name is all the box can hold - and the
     /// parentheses are what say "this was invoked" rather than "this is a thing".
-    private var call: String { event.name.isEmpty ? "" : event.name + "()" }
+    /// Taken from the Mac's view when there is one (it is the Mac that knows the
+    /// name was a call), with the same thing built here as the fallback for a
+    /// transcript from an older Mac.
+    private var call: String { event.view?.title ?? (event.name + "()") }
+
+    /// How long the tool took - the figure a command has always worn beside its
+    /// box, which Alex asked for here: "there are (), but no time of execution,
+    /// add it so it as on run_shell." Only the Mac can know it (a client is sent
+    /// events, not timings), and it is present only for a call that really
+    /// finished, so a row with nothing to say simply says nothing.
+    private var span: String { event.view?.span ?? "" }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -1341,6 +1351,12 @@ struct ToolRow: View {
                     .background(Color(white: 0.1))
                     .clipShape(RoundedRectangle(cornerRadius: 6))
                     .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Color(white: 0.2)))
+                // The duration sits AFTER the box, where a read's ", lines 1 to
+                // 19" and a search's ", 2 files" sit - a command's is the exception
+                // because it rides inside its own box.
+                if !span.isEmpty {
+                    Text(span).font(.system(size: 12)).foregroundStyle(Color(white: 0.42))
+                }
             }
             if open {
                 if let args = EventRow.prettyJSON(event.text), !event.text.isEmpty {

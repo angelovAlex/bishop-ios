@@ -63,9 +63,9 @@ struct ToolView {
         var tag: String         // eq, add, del, gap
         var text: String
     }
-    var kind = ""               // edit, read, search, ok
+    var kind = ""               // edit, read, search, shell, ok, unstyled
     var subtitle = ""           // "Edited" / "Created" / "Read" / "Found"
-    var title = ""              // file name, or "needle in folder" for a search
+    var title = ""              // file name, "needle in folder", or "name()"
     var path = ""
     var ok = true               // for kind == ok: did the tool succeed
     var added = 0
@@ -86,12 +86,18 @@ struct ToolView {
 
     /// Does this view DESCRIBE the row, rather than just report on it? A call's
     /// view describes (an edit's chip and diff, a read's file, a search's hits,
-    /// a command's box); a result's only reports ("ok", true). A result must
-    /// never take a description's place - the chip and the diff would vanish the
-    /// moment the tool answered, which is exactly how the edit chip once
-    /// disappeared.
+    /// a command's box, an unstyled tool's name-and-duration box); a result's
+    /// only reports ("ok", true). A result must never take a description's
+    /// place - the chip and the diff would vanish the moment the tool answered,
+    /// which is exactly how the edit chip once disappeared.
+    ///
+    /// An unstyled tool is the odd one and is listed for a different reason: it is
+    /// described at BOTH stages (at call time its box is already right, with no
+    /// figure yet), so its row really does hold a view of its own, and finding one
+    /// there is what stops the row being wiped when the result arrives.
     static func describes(_ v: ToolView?) -> Bool {
         v?.kind == "edit" || v?.kind == "read" || v?.kind == "search" || v?.kind == "shell"
+            || v?.kind == "unstyled"
     }
 
     /// The row's view once a result has arrived: the result's own when it carries
