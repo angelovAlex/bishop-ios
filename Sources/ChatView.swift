@@ -81,14 +81,38 @@ struct ChatView: View {
             .simultaneousGesture(TapGesture().onEnded { if sidebar { open(false) } })
             // A shadow off the chat's leading edge separates the two layers - it is
             // only drawn while the panel is open, or it would ring the closed chat's
-            // screen edges too.
-            .shadow(color: .black.opacity(sidebar ? 0.55 : 0), radius: 18, x: -8)
+            // screen edges too. Two parts, on purpose: a wide one for the fall-off and
+            // a tight one for the contact edge (one wide shadow alone reads as haze).
+            .shadow(color: .black.opacity(sidebar ? 0.8 : 0), radius: 28, x: -14)
+            .shadow(color: .black.opacity(sidebar ? 0.9 : 0), radius: 6, x: -2)
             // Framed to the screen before the z-order is set: a ZStack child takes
             // the size of the LARGEST child, and an offset one reports the screen
             // plus its own offset, which would leave the drawer's layer covering the
             // right-hand part of the chat.
             .frame(width: UIScreen.main.bounds.width)
             .zIndex(1)
+        }
+        // A LIT EDGE along the lid's leading edge, and it belongs to the ZSTACK, not
+        // the lid: `.offset` shifts what is DRAWN without moving the geometry, so an
+        // overlay attached to the lid was laid out at the screen's own left edge -
+        // underneath the drawer's black, invisible (measured: not one pixel changed
+        // within 1.5pt of the edge where it was supposed to be). Here the geometry is
+        // the screen's, so `drawerWidth` is where the lid really comes to rest.
+        //
+        // It is the cue that does the work on this screen: the drawer's surface is
+        // pure black, so a black shadow has nothing to darken - a column of the panel
+        // measures brightness 0.0 with the shadow at 0.55/18, its only visible effect
+        // being to dim the drawer's own text. Alex, on that: "make more noticable
+        // shadow as now it is too weak". On a black drawer the cue has to be light.
+        // Measured at 0.45/2.5: the highlight reads ~86/255 against the drawer's own
+        // rows at ~30, which is the same as the difference between the selected row and
+        // the panel - visible without becoming a drawn border.
+        .overlay(alignment: .leading) {
+            LinearGradient(colors: [.white.opacity(0.45), .white.opacity(0.0)],
+                           startPoint: .leading, endPoint: .trailing)
+                .frame(width: 2.5)
+                .padding(.leading, drawerWidth)
+                .opacity(sidebar ? 1 : 0)
         }
         .background(Color.black)
         .preferredColorScheme(.dark)
