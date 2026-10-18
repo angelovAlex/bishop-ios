@@ -1217,7 +1217,12 @@ struct EventRow: View {
             // (the diff is the point and is written down nowhere else); the read
             // and the search are born folded, so a whole file - or 300 hits -
             // stays one tap away. The full call stays one tap further in.
-            if let v = event.view, ToolView.describes(v) {
+            // The STYLED kinds (edit, read, search, shell) are drawn by the chip
+            // below; an UNSTYLED one is NOT - its view carries a name and a
+            // duration, which ToolRow draws, and handing it to EditChip would draw
+            // a file chip with no file, no glyph and no diff. So the test is for
+            // the styled kinds, not for "has a view": every tool has a view now.
+            if let v = event.view, ToolView.styles(v) {
                 EditChip(view: v, raw: event.text, result: event.ok == false ? event.result : "",
                          ok: event.ok, live: event.liveRows)
             } else {
@@ -1226,8 +1231,14 @@ struct EventRow: View {
         case .result:
             // A tool result with no call above it to join. Folded, as before.
             if let v = event.view, v.kind == "ok", v.ok { EmptyView() }
-            else if let v = event.view, ToolView.describes(v) {
+            else if let v = event.view, ToolView.styles(v) {
                 EditChip(view: v, raw: "", result: event.ok == false ? event.text : "")
+            } else if let v = event.view, v.kind == "unstyled" {
+                // Its call is gone from the transcript (a chat that began after
+                // the call, or a row the server re-sent on its own). The answer is
+                // all there is to show, so it is shown in the plain fold - the one
+                // place that draws text and nothing else.
+                Collapsible(summary: v.title, text: event.text, mono: true, tint: .gray)
             } else { Collapsible(summary: event.name, text: event.text, mono: true, tint: .gray) }
         case .output:
             // A command's output while it runs belongs to the row its call opened

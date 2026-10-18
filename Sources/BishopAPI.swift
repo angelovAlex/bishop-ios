@@ -100,6 +100,20 @@ struct ToolView {
             || v?.kind == "unstyled"
     }
 
+    /// Does this view want the file CHIP? Only the styled kinds do - an edit, a
+    /// read, a search and a command. An unstyled view ("unstyled") carries a name
+    /// and a duration and is drawn by ToolRow, so it must never be handed to the
+    /// chip: that would draw a file chip with no file, no glyph and no diff.
+    ///
+    /// The two questions are asked in different places for a reason. `describes`
+    /// is "does this row hold a view of its own?" - asked when a RESULT lands, to
+    /// decide whether a view may REPLACE the row's (an unstyled row says yes, and
+    /// that is what keeps its box and its figure). `styles` is "which of the two
+    /// rows draws this?" - asked where the row is built.
+    static func styles(_ v: ToolView?) -> Bool {
+        v?.kind == "edit" || v?.kind == "read" || v?.kind == "search" || v?.kind == "shell"
+    }
+
     /// The row's view once a result has arrived: the result's own when it carries
     /// one. A READ is the case this exists for - nothing is known about the file
     /// at call time, so the RESULT's view is the one with the lines, the span and,
