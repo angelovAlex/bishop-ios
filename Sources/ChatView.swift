@@ -43,7 +43,16 @@ struct ChatView: View {
         // NavigationLink inside a list of rows highlights its row and pushes
         // NOTHING (watched on the simulator, twice) - a row can only report where
         // to go, and the path is the state that actually goes there.
+        // The drawer is BEHIND the chat, and the chat is what moves: Alex, on the
+        // panel over the chat - "it draws menu on top of chat but it should look
+        // oposide, chat should slide to right to reveal menu". So the chat is the
+        // sliding LID here, not a thing the panel covers, and the drawer is revealed
+        // at the left edge as the chat slides off to the right.
         ZStack {
+            // Laid out FIRST, so it is UNDER the chat, and at its full width whether
+            // it is open or not: a width that existed only while open would make the
+            // whole screen re-lay-out at the end of every close animation.
+            drawer
             NavigationStack(path: $path) {
                 transcript
                     .modifier(BarsOverTranscript(glass: glassBar, header: header, bottom: bottomBars))
@@ -53,10 +62,33 @@ struct ChatView: View {
                         }
                     }
             }
-            // The drawer sits OVER the whole screen and OUTSIDE the stack: it
-            // belongs to the chat it acts on, and a pushed screen cannot reach the
-            // chat (see `drawer`).
-            drawer
+            // The whole stack is a LID on the screen - its own black covers the
+            // drawer on every edge - so it is the lid, and only the lid, that moves.
+            .background(Color.black)
+            // The chat slides right by the drawer's width, which is exactly what
+            // makes the drawer's whole width visible at the left and the remaining
+            // strip of chat (screen - drawerWidth) a fixed share of the screen on the
+            // right. The chat's own right-hand edge is off screen while it is open,
+            // which is the point of a lid.
+            .offset(x: sidebar ? drawerWidth : 0)
+            // Dragging the chat aside is the same gesture the panel slides with, so
+            // it is the chat, not the drawer, that knows whether a finger is on it.
+            .gesture(slide)
+            // ...and a tap on the chat closes the panel. Before this it was the
+            // scrim's tap that did that, and there is no scrim any more: the tap is
+            // simultaneous so a tap meant for a chip in the transcript is not
+            // swallowed by it.
+            .simultaneousGesture(TapGesture().onEnded { if sidebar { open(false) } })
+            // A shadow off the chat's leading edge separates the two layers - it is
+            // only drawn while the panel is open, or it would ring the closed chat's
+            // screen edges too.
+            .shadow(color: .black.opacity(sidebar ? 0.55 : 0), radius: 18, x: -8)
+            // Framed to the screen before the z-order is set: a ZStack child takes
+            // the size of the LARGEST child, and an offset one reports the screen
+            // plus its own offset, which would leave the drawer's layer covering the
+            // right-hand part of the chat.
+            .frame(width: UIScreen.main.bounds.width)
+            .zIndex(1)
         }
         .background(Color.black)
         .preferredColorScheme(.dark)
@@ -240,41 +272,77 @@ struct ChatView: View {
     /// (a dozen chats in a popover hang off the button, in the middle of the
     /// screen, in a panel sized by its own contents).
     ///
-    /// A hand-rolled overlay, not `toolbar(.principal)` + NavigationSplitView -
-    /// both of those were tried first and neither works here. `.principal` centres
-    /// its item against the WHOLE bar and ignores what precedes it, so a leading
-    /// button simply sat on top of the title (watched on the simulator), and a
+    /// It is the BOTTOM layer now, and the chat slides off it (see the body): no
+    /// scrim and no `if`, so there is nothing to fade - the reveal is the chat's own
+    /// slide, which is also why the panel needs no transition of its own. The panel
+    /// is wider than the screen (drawerWidth is capped at 380pt) and anchored to the
+    /// left edge, so its right-hand edge is off screen until the chat slides away -
+    /// the reveal is of the part that was already there, at the width it will have
+    /// when open, which is what stops the rows from re-laying-out mid-gesture.
+    ///
+    /// A hand-rolled layer, not `toolbar(.principal)` + NavigationSplitView - both
+    /// of those were tried first and neither works here. `.principal` centres its
+    /// item against the WHOLE bar and ignores what precedes it, so a leading button
+    /// simply sat on top of the title (watched on the simulator), and a
     /// NavigationSplitView gives up the glass header and the scroll-into-the-bars
-    /// effect entirely. The overlay keeps all of that for about the same code.
+    /// effect entirely.
     @ViewBuilder private var drawer: some View {
-        if sidebar {
-            ZStack(alignment: .leading) {
-                // The chat stays readable through a scrim rather than being pushed
-                // aside: nothing is asked of the transcript's layout, which is
-                // where the follow/scroll logic lives.
-                Color.black.opacity(0.55)
-                    .ignoresSafeArea()
-                    .onTapGesture { open(false) }
-                panel
-                    // A strip of the chat stays visible on the right, like the
-                    // reference: enough for a long title, and the panel reads as a
-                    // layer over the chat rather than as another screen.
-                    .frame(width: drawerWidth)
-                    .frame(maxHeight: .infinity, alignment: .top)
-                    // The panel's own surface, ignoring the safe area so its black
-                    // reaches both screen edges; the ROWS stay inside the safe area,
-                    // which is what keeps the status row off the home indicator.
-                    .background(Color.black.ignoresSafeArea())
-                    .overlay(alignment: .trailing) {
-                        Rectangle().fill(.white.opacity(0.12)).frame(width: 1)
-                    }
-                    .transition(.move(edge: .leading))
-            }
-            // Its own layer, over the chat alone: the bars and the composer are
-            // behind it and stay put while the panel slides.
-            .transition(.opacity)
-            .zIndex(1)
+        ZStack(alignment: .leading) {
+            // The drawer's SURFACE ignores the safe area - its own black has to reach
+            // every edge - while the rows stay inside it, which is what keeps the
+            // status row off the home indicator AND "Bishop" off the status clock:
+            // Alex, on the panel of the sliding lid - "just make bishop label lower".
+            // Before this the `ignoresSafeArea` sat on the ZStack, so it moved the
+            // CONTENT too and the header slid up under the clock.
+            Color.black.ignoresSafeArea()
+            panel
+                // The panel is placed by its LEFT EDGE at the inset, and its rows
+                // stay inside the safe area; the black around them is what reaches
+                // the screen's edges and the home indicator. A plain
+                // `.frame(width:)` here would CENTRE the panel in the layer instead
+                // (a frame places its content in the middle), which is what put the
+                // first attempt's rows half behind the chat.
+                .frame(width: drawerWidth, alignment: .leading)
         }
+    }
+
+    /// The chat's own leading edge, where the drag back to the drawer begins: the
+    /// chat stops exactly at the drawer's width, so this is both how far the chat
+    /// slides and how wide the strip is that a drag may start in.
+    private var edgeZone: CGFloat {
+        drawerWidth
+    }
+
+    /// Drag the chat right to reveal the drawer, left to put it back.
+    ///
+    /// The chat is ALREADY at `drawerWidth` when the drawer is open, so the finger's
+    /// own translation IS the position: dragging it from there to 0 closes the panel
+    /// exactly as a finger expects, with no separate "where did this drag start"
+    /// bookkeeping. The drag is only picked up on the chat's leading edge - the strip
+    /// the drawer leaves beside it - because a drag anywhere else belongs to the
+    /// transcript, which scrolls.
+    ///
+    /// Three details are load-bearing, all measured: `minimumDistance: 4` low enough
+    /// that a slow drag is still a drag (a 44pt edge strip asked against a
+    /// whole-screen frame was delivered nothing until the distance threshold was
+    /// lowered); the drag PICKED from the zone's outcome rather than claimed
+    /// high-priority; and `onEnded` clearing `dragging`, without which the
+    /// transcript would never follow the newest text again.
+    private var slide: some Gesture {
+        DragGesture(minimumDistance: 4)
+            .onChanged { v in
+                guard sidebar || v.startLocation.x <= edgeZone else { return }
+                dragging = true
+                let x = max(0, min(drawerWidth, (sidebar ? drawerWidth : 0) + v.translation.width))
+                let want = x > drawerWidth * 0.3
+                if want != sidebar {
+                    withAnimation(.snappy(duration: 0.28)) { sidebar = want }
+                }
+            }
+            .onEnded { _ in
+                dragging = false
+                if sidebar { open(false) }
+            }
     }
 
     /// How much of the screen the drawer takes - not a constant, because in
@@ -284,9 +352,9 @@ struct ChatView: View {
         min(UIScreen.main.bounds.width * 0.86, 380)
     }
 
-    /// Show or hide the drawer, as an ANIMATION. An overlay behind an `if` does not
-    /// animate by itself - without this the panel appears and vanishes in a single
-    /// frame, which reads as the screen being redrawn rather than as a drawer.
+    /// Show or hide the drawer, as an ANIMATION, with the CHAT moving - the panel is
+    /// under it and has nothing to animate of its own. This is the one place the
+    /// animation is chosen, so a row that closes the panel animates like the button.
     private func open(_ want: Bool) {
         withAnimation(.snappy(duration: 0.28)) { sidebar = want }
     }
