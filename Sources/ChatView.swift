@@ -1296,13 +1296,32 @@ struct ToolRow: View {
     let event: ChatEvent
     @State private var open = false
 
+    /// The call has not answered yet, so there is nothing true to say about it:
+    /// `ok` is nil until the result lands. The verdict is drawn only once it is
+    /// known, exactly as the chip does it - a cross beside a call that is merely
+    /// still running would be a lie, and the old row (which drew the mark only
+    /// `if let ok`) was right about that.
+    private var ok: Bool? { event.ok }
+
+    /// What the row says happened: "Running" until the answer lands, then "Ran"
+    /// or "Failed" - the words the Mac uses for a command, because this row is
+    /// its shape. The NAME is the box, the way a file's name is the box in an
+    /// edit's chip; a plain tool's name is all the call can say (its arguments are
+    /// JSON), so naming it twice would say nothing twice.
+    private var label: String {
+        guard let ok else { return "Running" }
+        return ok ? "Ran" : "Failed"
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 6) {
-                Text(event.ok ? "\u{2713}" : "\u{2717}")
-                    .font(.system(size: 12, weight: .bold))
-                    .foregroundStyle(event.ok ? ToolRow.green : ToolRow.red)
-                Text(event.name).font(.system(size: 14)).foregroundStyle(Color(white: 0.62))
+                if let ok {
+                    Text(ok ? "\u{2713}" : "\u{2717}")
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundStyle(ok ? ToolRow.green : ToolRow.red)
+                }
+                Text(label).font(.system(size: 14)).foregroundStyle(Color(white: 0.62))
                 Text(event.name)
                     .font(.system(size: 12.5, weight: .medium, design: .monospaced))
                     .foregroundStyle(Color(white: 0.92)).lineLimit(1)
@@ -1318,7 +1337,7 @@ struct ToolRow: View {
                 }
                 if !event.result.isEmpty {
                     Text(event.result).font(.system(size: 11, design: .monospaced))
-                        .foregroundStyle(event.ok ? Color(white: 0.7) : ToolRow.red.opacity(0.9))
+                        .foregroundStyle(ok == false ? ToolRow.red.opacity(0.9) : Color(white: 0.7))
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
@@ -1328,8 +1347,8 @@ struct ToolRow: View {
         // A failure opens itself: both halves are needed - onAppear for a session
         // replayed from disk (the row arrives with ok already false, so nothing
         // ever CHANGES), onChange for the live stream.
-        .onAppear { if !event.ok { open = true } }
-        .onChange(of: event.ok) { _, now in if !now { open = true } }
+        .onAppear { if ok == false { open = true } }
+        .onChange(of: event.ok) { _, now in if now == false { open = true } }
     }
 
     private func toggle() { withAnimation(.easeInOut(duration: 0.15)) { open.toggle() } }
