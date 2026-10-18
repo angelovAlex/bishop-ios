@@ -352,25 +352,21 @@ struct ChatView: View {
     /// chat, and he wants more of the chat on show. 0.78 is 314, a 88pt (22%) strip:
     /// the classic iOS drawer share.
     ///
-    /// Then Alex, with that build in his hand: "text at left ends with ... before it
-    /// reaches chat. I want text to go bellow chat". A long chat title truncated at
-    /// 266pt of a 306pt panel, so ~40pt of dead space stood between the "..." and the
-    /// chat, which reads as a truncation that gave up too early. The trailing margin
-    /// was never the panel's to give: the chat's LID slides over the panel's right-hand
-    /// end, so most of that padding is covered anyway - the 16pt a row already carries
-    /// is enough, and the panel's last 12pt are taken back here so a title runs on
-    /// until the chat really is on top of it. Measured on his screenshot: the longest
-    /// title's ink ended at 263pt while the lid's edge stands at 314pt.
+    /// NOT shrunk any further than that, on purpose. Alex then, with that build in
+    /// his hand: "text at left ends with ... before it reaches chat. I want text to
+    /// go bellow chat". His screenshot measures it exactly: a title's "..." sat at
+    /// 274pt while the chat's edge stands at 302pt. The first attempt at this took
+    /// 12pt off the PANEL - which is the wrong lever: it drags the row's highlight and
+    /// the status row's divider out from under the chat, and it leaves the text where
+    /// it was, so the dead space survives and the panel just looks narrower (which is
+    /// what Alex saw: "it seems same for me"). What the text needs is the space the
+    /// row was wasting, not a narrower panel - see drawerRow.
     ///
     /// Not a constant, because in landscape 0.86 of the width is very nearly the
     /// whole screen for a single column of rows.
     private var drawerWidth: CGFloat {
-        min(UIScreen.main.bounds.width * 0.78, 380) - trailingSlack
+        min(UIScreen.main.bounds.width * 0.78, 380)
     }
-
-    /// The strip of the panel the chat's lid covers, handed back to the rows: what
-    /// makes a long title run on until the chat is on top of it (see drawerWidth).
-    private let trailingSlack: CGFloat = 12
 
     /// Show or hide the drawer, as an ANIMATION, with the CHAT moving - the panel is
     /// under it and has nothing to animate of its own. This is the one place the
@@ -394,8 +390,10 @@ struct ChatView: View {
             drawerRow("Settings", "gearshape", action: { request = MenuRequest(screen: .settings) })
 
             // The chat list is the part that scrolls: a hundred conversations must
-            // not push the rows above off the top of the panel.
-            ScrollView {
+            // not push the rows above off the top of the panel. It has to be told to be
+            // RIGID, or it sizes itself to its own tallest child and a long title drags
+            // the whole panel wider than the chat that is supposed to cover it.
+            ScrollView(.vertical) {
                 VStack(alignment: .leading, spacing: 0) {
                     drawerCaption("Chats")
                     // The UNSAVED chat comes first when there is one on screen. The
@@ -417,6 +415,7 @@ struct ChatView: View {
                 }
                 .padding(.bottom, 8)
             }
+            .scrollBounceBehavior(.basedOnSize)
 
             // The one row that talks about the Mac instead of the app's own
             // screens, and the reason it is here: the drawer is what a reader opens
@@ -431,6 +430,14 @@ struct ChatView: View {
             .padding(.leading, 16).padding(.trailing, 6).padding(.vertical, 10)
             .overlay(alignment: .top) { Rectangle().fill(.white.opacity(0.12)).frame(height: 1) }
         }
+        // The panel is CUT at the drawer's own edge - a real cut, not a frame: a
+        // `.frame(width:)` on the vivid rows would not stop a rigid child from drawing
+        // at its full width, and a long title would then run on UNDER the chat as a
+        // column of clipped glyphs down the whole screen. This way a title runs on
+        // until the chat's lid, at the width the lid comes to rest at, and is cleanly
+        // gone past it.
+        .frame(width: drawerWidth, alignment: .leading)
+        .clipped()
     }
 
     /// One row of the drawer. Every row of the panel is one of these - the two
@@ -444,7 +451,15 @@ struct ChatView: View {
             HStack(spacing: 12) {
                 if !symbol.isEmpty { Image(systemName: symbol).font(.system(size: 16)).frame(width: 22) }
                 Text(title).font(.system(size: 16)).lineLimit(1)
-                Spacer()
+                    // NOT truncated at the panel's edge: the drawer is the layer UNDER
+                    // the chat, so a long title runs on until the chat covers it. Alex,
+                    // with the truncating build in his hand: "text at left ends with
+                    // ... before it reaches chat. I want text to go bellow chat" - his
+                    // screenshot put the "..." at 274pt while the chat's edge is at
+                    // 302pt, i.e. ~30pt of black between the two, spent on a "..." the
+                    // reader did not need. The panel clips this at its own edge (see
+                    // `panel`), which IS where the chat's lid comes to rest.
+                    .fixedSize(horizontal: true, vertical: false)
             }
             .padding(.leading, 16).padding(.trailing, 6).padding(.vertical, 13)
             .frame(maxWidth: .infinity, alignment: .leading)
