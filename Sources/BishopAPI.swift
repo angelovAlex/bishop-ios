@@ -452,8 +452,15 @@ final class BishopAPI: ObservableObject {
                     // A result's view REPORTS ("ok", true); the call's view
                     // DESCRIBES (an edit's chip and diff). describedBy keeps the
                     // description - except for a read, whose content only ever
-                    // exists in the result.
-                    out[i].view = ToolView.describedBy(out[i].view, view)
+                    // exists in the result. A view the app cannot DRAW is dropped:
+                    // a plain tool has no view of its own, so the only one it ever
+                    // gets is the result's ("ok", true), and EventRow would then
+                    // hand the row to its fallback on the very line that says the
+                    // tool SUCCEEDED - the row would vanish as it finished. The row
+                    // is drawn from the event itself (its tick, its name, its
+                    // result), so nothing is lost by dropping it.
+                    let held = ToolView.describedBy(out[i].view, view)
+                    out[i].view = ToolView.describes(held) ? held : nil
                     // The run is over and its output is now the RESULT's (the
                     // row draws that from here on), so the live copy goes: two
                     // copies of the same lines could only disagree.

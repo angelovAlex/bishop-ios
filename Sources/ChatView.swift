@@ -1272,58 +1272,67 @@ struct EventRow: View {
     }
 }
 
-/// A plain tool call and its result: ONE row. The call is the line; the fold
-/// holds the whole call, pretty-printed, and what the tool answered. It is born
-/// looking like a call ("name {args}") because that is what has happened so far,
-/// and gains a green tick (or a red cross) the moment the tool answers.
+/// A tool call with NO view of its own - everything but an edit, a read, a
+/// search and a command. It is drawn as the SAME chip as they are, one row with
+/// a tick and a name, because from here a tool call is a tool call: what makes
+/// the special kinds special is their CONTENT (a diff, a file, hits, a live
+/// output), never their frame. Alex asked for exactly this and drew the line
+/// himself: "I want to change only styling of tools that has no special style -
+/// don't change what already works."
 ///
-/// A failure opens the fold on its own: the reason ("Error: no such file") is
-/// the only place it is written down, and an unasked tap is a small price for
-/// never hiding why something did not run.
+/// It was a yellow "name {json}" line, clamped to two lines, with its arguments,
+/// its result and its own JSON jumbled into one disclosure - so the same call
+/// looked like a different feature depending on whether the Mac happened to know
+/// how to draw it.
+///
+/// THE NAME IS ALL THE CALL SAYS: the arguments are JSON, and JSON on a phone is
+/// noise. A tap folds the call out (pretty-printed, because it is also for
+/// copying) and the answer under it - a failure opens itself, since its reason is
+/// written down nowhere else. Which means the CALL carries no text and the ROW
+/// carries the answer (`ChatEvent.result`), the way a shell row does: the call is
+/// what was asked, the result is what came back, and neither belongs in the
+/// other's place.
 struct ToolRow: View {
     let event: ChatEvent
     @State private var open = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 3) {
-            HStack(alignment: .top, spacing: 5) {
-                Text(open ? "\u{25BE}" : "\u{25B8}").font(.system(size: 10)).foregroundStyle(.gray)
-                Text(event.name + " " + event.text)
-                    .font(.system(size: 12, design: .monospaced))
-                    .foregroundStyle(Color.yellow.opacity(0.8)).lineLimit(2)
-                    .multilineTextAlignment(.leading)
-                if let ok = event.ok {
-                    Text(ok ? "\u{2713}" : "\u{2717}")
-                        .font(.system(size: 12, weight: .bold))
-                        .foregroundStyle(ok ? ToolRow.green : ToolRow.red)
-                }
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Text(event.ok ? "\u{2713}" : "\u{2717}")
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundStyle(event.ok ? ToolRow.green : ToolRow.red)
+                Text(event.name).font(.system(size: 14)).foregroundStyle(Color(white: 0.62))
+                Text(event.name)
+                    .font(.system(size: 12.5, weight: .medium, design: .monospaced))
+                    .foregroundStyle(Color(white: 0.92)).lineLimit(1)
+                    .padding(.horizontal, 9).padding(.vertical, 4)
+                    .background(Color(white: 0.1))
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                    .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Color(white: 0.2)))
             }
-            .contentShape(Rectangle())
-            .onTapGesture { withAnimation(.easeInOut(duration: 0.15)) { open.toggle() } }
-            if open, !fold.isEmpty {
-                Text(fold).font(.system(size: 11, design: .monospaced))
-                    .foregroundStyle(.gray).textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.leading, 12)
+            if open {
+                if let args = EventRow.prettyJSON(event.text), !event.text.isEmpty {
+                    Text(args).font(.system(size: 10, design: .monospaced))
+                        .foregroundStyle(.gray)
+                }
+                if !event.result.isEmpty {
+                    Text(event.result).font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(event.ok ? Color(white: 0.7) : ToolRow.red.opacity(0.9))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        // A failure opens itself: its reason is written down nowhere else. Both
-        // halves are needed - onAppear for a session replayed from disk (the row
-        // is built with ok already set, so nothing ever CHANGES), onChange for
-        // the live stream, where the row is born without it.
-        .onAppear { if event.ok == false { open = true } }
-        .onChange(of: event.ok) { _, now in if now == false { open = true } }
+        .onTapGesture { toggle() }
+        // A failure opens itself: both halves are needed - onAppear for a session
+        // replayed from disk (the row arrives with ok already false, so nothing
+        // ever CHANGES), onChange for the live stream.
+        .onAppear { if !event.ok { open = true } }
+        .onChange(of: event.ok) { _, now in if !now { open = true } }
     }
 
-    /// What the fold holds: the call as it was made, then the answer. Raw JSON is
-    /// kept alongside the pretty version because a fold is also for copying.
-    private var fold: String {
-        var s = ""
-        if !event.text.isEmpty { s = "call\n" + (EventRow.prettyJSON(event.text) ?? event.text) }
-        if !event.result.isEmpty { s += (s.isEmpty ? "" : "\n\n") + "result\n" + event.result }
-        return s
-    }
+    private func toggle() { withAnimation(.easeInOut(duration: 0.15)) { open.toggle() } }
 
     private static let green = Color(red: 0.4, green: 0.85, blue: 0.5)
     private static let red = Color(red: 1.0, green: 0.45, blue: 0.45)
@@ -1600,11 +1609,10 @@ struct EditChip: View {
                         .foregroundStyle(ok ? EditChip.green : EditChip.red)
                 }
                 // Alex: "make 'Read'/'Ran' on chips a bit smaller, same size as
-                // the text inside the chip". It had no font at all, so it fell
-                // back to the body size (17pt) and stood taller than the very
-                // box it belongs to. Size only - it was 15pt-ish, so the chip
-                // was as tall as its label.
-                Text(label).font(.system(size: 12.5)).foregroundStyle(Color(white: 0.62))
+                // the text inside the chip" - then, once he saw it, "label only
+                // 14px". It had no font at all, so it fell back to the body size
+                // (17pt) and stood taller than the very box it labels.
+                Text(label).font(.system(size: 14)).foregroundStyle(Color(white: 0.62))
                 // The box and the span are ONE group, so the ", lines 1 to 19"
                 // hugs the box instead of floating a stack-spacing away from it.
                 HStack(spacing: 0) {
