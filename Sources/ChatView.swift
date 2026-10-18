@@ -1599,7 +1599,12 @@ struct EditChip: View {
                         .font(.system(size: 12, weight: .bold))
                         .foregroundStyle(ok ? EditChip.green : EditChip.red)
                 }
-                Text(label).foregroundStyle(Color(white: 0.62))
+                // Alex: "make 'Read'/'Ran' on chips a bit smaller, same size as
+                // the text inside the chip". It had no font at all, so it fell
+                // back to the body size (17pt) and stood taller than the very
+                // box it belongs to. Size only - it was 15pt-ish, so the chip
+                // was as tall as its label.
+                Text(label).font(.system(size: 12.5)).foregroundStyle(Color(white: 0.62))
                 // The box and the span are ONE group, so the ", lines 1 to 19"
                 // hugs the box instead of floating a stack-spacing away from it.
                 HStack(spacing: 0) {
