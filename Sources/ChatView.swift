@@ -345,11 +345,18 @@ struct ChatView: View {
             }
     }
 
-    /// How much of the screen the drawer takes - not a constant, because in
-    /// landscape 0.86 of the width is very nearly the whole screen for a single
-    /// column of rows.
+    /// How far the chat slides - i.e. how much of the screen the drawer takes, and
+    /// with it how wide the strip of chat left beside it is. Alex, after the sliding
+    /// lid shipped: "make it a bit less opened bu chat, I mean chat goes a bit less
+    /// to right" - 0.86 of a 402pt screen is 346, which left a 56pt (14%) strip of
+    /// chat, and he wants more of the chat on show. 0.78 is 314, a 88pt (22%) strip:
+    /// the classic iOS drawer share, and still wide enough for the longest chat title
+    /// before it truncates.
+    ///
+    /// Not a constant, because in landscape 0.86 of the width is very nearly the
+    /// whole screen for a single column of rows.
     private var drawerWidth: CGFloat {
-        min(UIScreen.main.bounds.width * 0.86, 380)
+        min(UIScreen.main.bounds.width * 0.78, 380)
     }
 
     /// Show or hide the drawer, as an ANIMATION, with the CHAT moving - the panel is
