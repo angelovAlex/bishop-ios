@@ -128,6 +128,10 @@ struct ToolView {
     /// output, its exit code and its duration all exist only in the result, so
     /// the result's view is the one that has to be drawn. (The call's view says
     /// "Running", and is what the row spins a wheel for until then.)
+    ///
+    /// An UNSTYLED row is the mirror of an edit: its box is right at both stages
+    /// ("name()"), so it keeps the CALL's view - and its duration, which exists
+    /// only in the result, is carried across below.
     static func describedBy(_ call: ToolView?, _ result: ToolView?) -> ToolView? {
         guard let out = (result?.kind == "read" || result?.kind == "search" || result?.kind == "shell"
             ? result : nil) ?? call else { return nil }
@@ -140,6 +144,16 @@ struct ToolView {
         // over), so this flag would otherwise be lost here and the row would
         // collapse on the last byte.
         if call?.stream == true { v.stream = true }
+        // HOW LONG IT TOOK COMES FROM THE RESULT, whatever kind this is, because
+        // the result is the only stage that can know it: a tool has not run when
+        // its call is drawn, so a call's view carries no figure - an unstyled
+        // call's is "name()" and nothing else. Keeping the call's view for an
+        // unstyled row (which is what this function does, its box being right at
+        // both stages) therefore threw the figure away, and the phone drew
+        // `✓ Ran get_voice()` with no time beside it while the Mac had measured
+        // one all along. Taking it here is not a special case for one kind: it is
+        // the figure's own rule, stated once.
+        if v.span.isEmpty, let s = result?.span, !s.isEmpty { v.span = s }
         return v
     }
 
