@@ -7,16 +7,17 @@ import PhotosUI
 import SwiftUI
 
 struct ChatView: View {
-    @ObservedObject private var api: BishopAPI
-    @ObservedObject private var events: EventFeed
-    @ObservedObject private var chat: ChatStore
-
-    @State private var showStats = false
-    @State private var showLevels = false    // the effort chip's popover
-    @State private var fullPicture: String?
+    @StateObject private var api = BishopAPI()
+    @State private var events: [ChatEvent] = []
     @State private var draft = ""
     @State private var attachments: [(path: String, name: String)] = []
     @State private var picker: [PhotosPickerItem] = []
+    @State private var showStats = false
+    @State private var showLevels = false    // the effort chip's popover
+    @State private var fullPicture: String?
+    @State private var path: [ChatView.Screen] = []   // what the back menu pushed
+    @State private var request: MenuRequest?  // what a menu row asked for; see carry(_:)
+    @State private var sidebar = false        // the drawer: chats, New chat, Settings
     @State private var mine: UUID?            // a just-sent message, to be put at the top
     @State private var content: CGFloat = 0   // how tall the transcript is
     @State private var viewport: CGFloat = 0  // ...and how much room it has
@@ -27,39 +28,48 @@ struct ChatView: View {
     @State private var geo = ScrollGeo()      // the scroll's raw numbers, for the debug strip
     @FocusState private var typing: Bool      // the composer's focus, so send() can drop the keyboard
 
-    init(api: BishopAPI, events: EventFeed, chat: ChatStore) {
-        self.api = api
-        self.events = events
-        self.chat = chat
-    }
-
     var body: some View {
-        transcript
-            // The bars hang off the SCROLL VIEW itself, via safeAreaBar - see
-            // BarsOverTranscript. Inside a VStack the transcript stopped at their
-            // edge, so nothing ever scrolled under the glass and the glass itself
-            // was impossible to see; only a direct child can be pinned like this
-            // and get the scroll edge effect (the frosted band under a bar).
-            .modifier(BarsOverTranscript(glass: glassBar, bottom: bottomBars))
-            // Title and back button are the SYSTEM bar's, and that is the point of
-            // this whole screen: a hidden bar takes the push/pop animation and the
-            // swipe from the left edge with it. Back goes to the chat menu, which
-            // is the screen this one was pushed from.
-            .navigationTitle(chat.title)
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                // Alex: "3. keep it as it is now". The pencil stays and keeps its
-                // one job - NEW CHAT (the same screen clears, no second transcript
-                // pushed on top) - rather than becoming a second way into the menu:
-                // the menu is one swipe or one tap on the back button away.
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button { Task { await newChat() } } label: {
-                        Image(systemName: "square.and.pencil")
+        // The bars hang off the SCROLL VIEW itself, via safeAreaBar - see
+        // BarsOverTranscript. Inside a VStack the transcript stopped at their
+        // edge, so nothing ever scrolled under the glass and the glass itself was
+        // impossible to see; only a direct child can be pinned like this and get
+        // the scroll edge effect (the frosted band under a bar).
+        // The stack wraps the WHOLE screen, bars included: Settings is pushed onto
+        // THIS stack, and the header (which holds the drawer button) hangs off the
+        // scroll view through BarsOverTranscript - a stack around the transcript
+        // alone would leave that header outside it.
+        //
+        // The push is driven by `path`, not by a NavigationLink in the drawer: a
+        // NavigationLink inside a list of rows highlights its row and pushes
+        // NOTHING (watched on the simulator, twice) - a row can only report where
+        // to go, and the path is the state that actually goes there.
+        ZStack {
+            NavigationStack(path: $path) {
+                transcript
+                    .modifier(BarsOverTranscript(glass: glassBar, header: header, bottom: bottomBars))
+                    .navigationDestination(for: Screen.self) { s in
+                        switch s {
+                        case .settings: SettingsView(api: api)
+                        }
                     }
-                }
             }
-            .background(Color.black)
-            .preferredColorScheme(.dark)
+            // The drawer sits OVER the whole screen and OUTSIDE the stack: it
+            // belongs to the chat it acts on, and a pushed screen cannot reach the
+            // chat (see `drawer`).
+            drawer
+        }
+        .background(Color.black)
+        .preferredColorScheme(.dark)
+        .onChange(of: request) { _, r in
+            guard let r else { return }
+            request = nil                    // one tap, one request
+            // The panel is SLID, not popped: an overlay inside an `if` is not
+            // animated unless the state change itself is animated, and a drawer
+            // that appears in one frame reads as a redraw rather than as a panel
+            // coming out.
+            withAnimation(.snappy(duration: 0.28)) { sidebar = false }
+            Task { await carry(r) }
+        }
             .task {
                 // Keep trying until the Mac answers. iOS asks "find devices on your
                 // local network" the first time the app touches 192.168.x.x, and the
@@ -73,6 +83,7 @@ struct ChatView: View {
                     await reload()
                 }
             }
+            .onAppear { startStream() }
             .sheet(item: Binding(get: { fullPicture.map(PicturePath.init) }, set: { fullPicture = $0?.path })) {
                 PictureView(path: $0.path, api: api)
             }
@@ -91,6 +102,45 @@ struct ChatView: View {
         if #available(iOS 26.0, *) { return true }
         #endif
         return false
+    }
+
+    private var header: some View {
+        HStack(spacing: 12) {
+            // Back: the DRAWER, not a menu. Alex, with the Gemini app on screen:
+            // "change the back button on ios works, it show menu, but many is
+            // wrong style, it should navigate back to another window. That window
+            // should have New chat, settings and list of chats".
+            Button { open(true) } label: {
+                Image(systemName: "line.3.horizontal").font(.system(size: 18, weight: .medium))
+                    .frame(width: 34, height: 34)
+                    .contentShape(.rect)
+            }
+            .buttonBorderShape(.circle).barButton(glassBar)
+            .accessibilityLabel("Chats, new chat and settings")
+
+            // The title is plain, like the button: the drawer it names is one tap
+            // away on the left now, so the capsule became a caption with no job.
+            Text(title).font(.headline).foregroundStyle(.white).lineLimit(1)
+                .frame(maxWidth: .infinity, minHeight: 34)
+
+            Button { Task { await newChat() } } label: {
+                Image(systemName: "square.and.pencil").font(.system(size: 20, weight: .semibold))
+                    .frame(width: 34, height: 34)
+            }
+            .buttonBorderShape(.circle).barButton(glassBar)
+        }
+        // Alex: "there is some not used space on left and right on ios client.
+        // remove paddings so all width of screen will be used". The 10pt that
+        // used to be here was a THIRD inset, on top of the chevron's own 17pt
+        // circle and the title capsule's 14pt - its only job was to keep the
+        // BAR's rounded glass edge off the display edge, and the bar is a
+        // full-width band that has no rounded edge to keep in. The padding the
+        // controls need is theirs (the circle's hit area, the capsule's inner
+        // text), so nothing here is load-bearing; dropping it gives the row the
+        // 20pt back for the title and lets the symbols sit at the system's own
+        // bar margin.
+        .padding(.horizontal, 0).padding(.vertical, 2)
+        .tint(glassBar ? .white : .gray)
     }
 
     /// Stats strip and composer, in one bar under the transcript. They used to be
@@ -162,13 +212,178 @@ struct ChatView: View {
         return s
     }
 
+    private var title: String {
+        api.sessions.first { $0.id == api.session }?.title ?? (api.session.isEmpty ? "Bishop" : api.session)
+    }
+
+    // MARK: the drawer
+
+    /// What a row of the drawer asked for. A row is INERT: it records the request
+    /// and the one task in the body carries it out (and closes the drawer). That
+    /// keeps each row one line and, more to the point, keeps the DECIDING in one
+    /// place - what an id means (open that chat) is written once, instead of at
+    /// every row that can produce one.
+    struct MenuRequest: Equatable {
+        var screen: Screen?               // push a screen (Settings)
+        var newChat = false
+        var session: String?              // open this chat (empty id = the unsaved one)
+    }
+
+    /// A screen the chat can push. The stack's path is what pushes it: a
+    /// `NavigationLink` inside a menu of rows highlights its row and pushes
+    /// NOTHING (verified on the simulator, twice), and this cannot silently fail.
+    enum Screen: Hashable { case settings }
+
+    /// The drawer: the chats, then the app's own furniture. This is what the
+    /// reference app (Gemini) opens from the button at the top left, and it
+    /// replaced a `Menu` under a chevron - a MENU is the wrong widget for a LIST
+    /// (a dozen chats in a popover hang off the button, in the middle of the
+    /// screen, in a panel sized by its own contents).
+    ///
+    /// A hand-rolled overlay, not `toolbar(.principal)` + NavigationSplitView -
+    /// both of those were tried first and neither works here. `.principal` centres
+    /// its item against the WHOLE bar and ignores what precedes it, so a leading
+    /// button simply sat on top of the title (watched on the simulator), and a
+    /// NavigationSplitView gives up the glass header and the scroll-into-the-bars
+    /// effect entirely. The overlay keeps all of that for about the same code.
+    @ViewBuilder private var drawer: some View {
+        if sidebar {
+            ZStack(alignment: .leading) {
+                // The chat stays readable through a scrim rather than being pushed
+                // aside: nothing is asked of the transcript's layout, which is
+                // where the follow/scroll logic lives.
+                Color.black.opacity(0.55)
+                    .ignoresSafeArea()
+                    .onTapGesture { open(false) }
+                panel
+                    // A strip of the chat stays visible on the right, like the
+                    // reference: enough for a long title, and the panel reads as a
+                    // layer over the chat rather than as another screen.
+                    .frame(width: drawerWidth)
+                    .frame(maxHeight: .infinity, alignment: .top)
+                    // The panel's own surface, ignoring the safe area so its black
+                    // reaches both screen edges; the ROWS stay inside the safe area,
+                    // which is what keeps the status row off the home indicator.
+                    .background(Color.black.ignoresSafeArea())
+                    .overlay(alignment: .trailing) {
+                        Rectangle().fill(.white.opacity(0.12)).frame(width: 1)
+                    }
+                    .transition(.move(edge: .leading))
+            }
+            // Its own layer, over the chat alone: the bars and the composer are
+            // behind it and stay put while the panel slides.
+            .transition(.opacity)
+            .zIndex(1)
+        }
+    }
+
+    /// How much of the screen the drawer takes - not a constant, because in
+    /// landscape 0.86 of the width is very nearly the whole screen for a single
+    /// column of rows.
+    private var drawerWidth: CGFloat {
+        min(UIScreen.main.bounds.width * 0.86, 380)
+    }
+
+    /// Show or hide the drawer, as an ANIMATION. An overlay behind an `if` does not
+    /// animate by itself - without this the panel appears and vanishes in a single
+    /// frame, which reads as the screen being redrawn rather than as a drawer.
+    private func open(_ want: Bool) {
+        withAnimation(.snappy(duration: 0.28)) { sidebar = want }
+    }
+
+    private var panel: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 10) {
+                Text("Bishop").font(.title3.weight(.semibold))
+                Spacer()
+                drawerRow("Close", "xmark", action: { open(false) })
+            }
+            .padding(.leading, 23).padding(.trailing, 7)
+            .padding(.top, 14).padding(.bottom, 10)
+
+            drawerRow("New chat", "square.and.pencil",
+                      action: { request = MenuRequest(newChat: true) }, selected: true)
+            drawerRow("Settings", "gearshape", action: { request = MenuRequest(screen: .settings) })
+
+            // The chat list is the part that scrolls: a hundred conversations must
+            // not push the rows above off the top of the panel.
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    drawerCaption("Chats")
+                    // The UNSAVED chat comes first when there is one on screen. The
+                    // app shows a chat the server has not written down yet (or an
+                    // empty new one), and a list that omitted it would read as "my
+                    // conversation is gone" while it is right there behind the
+                    // panel. Alex's ask is a list of chats, and the one being read
+                    // is one of them.
+                    if api.session.isEmpty {
+                        drawerChat(id: "", title: events.isEmpty ? "New chat" : "This chat", selected: true)
+                    }
+                    ForEach(api.sessions) { s in
+                        drawerChat(id: s.id, title: s.title, selected: s.id == api.session)
+                    }
+                    if api.sessions.isEmpty && !api.session.isEmpty {
+                        Text("Nothing saved yet").font(.footnote).foregroundStyle(.secondary)
+                            .padding(.horizontal, 16).padding(.vertical, 8)
+                    }
+                }
+                .padding(.bottom, 8)
+            }
+
+            // The one row that talks about the Mac instead of the app's own
+            // screens, and the reason it is here: the drawer is what a reader opens
+            // when the app seems dead, so the state has to be readable without
+            // going anywhere. The address is on the Settings screen above it.
+            HStack(spacing: 8) {
+                Circle().fill(api.connected ? Color.green : Color.orange).frame(width: 8, height: 8)
+                Text(api.connected ? "Connected" : "Not connected").font(.footnote)
+                Spacer()
+                Text(api.host).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+            }
+            .padding(.horizontal, 16).padding(.vertical, 10)
+            .overlay(alignment: .top) { Rectangle().fill(.white.opacity(0.12)).frame(height: 1) }
+        }
+    }
+
+    /// One row of the drawer. Every row of the panel is one of these - the two
+    /// fixed ones and every chat - so the hit area, the highlight and the leading
+    /// margin are written once. A chat has no symbol: an icon on every line of a
+    /// list of conversations is wallpaper, while "New chat" and "Settings" need
+    /// one to be told apart at a glance.
+    private func drawerRow(_ title: String, _ symbol: String, action: @escaping () -> Void,
+                           selected: Bool = false) -> some View {
+        Button(action: action) {
+            HStack(spacing: 12) {
+                if !symbol.isEmpty { Image(systemName: symbol).font(.system(size: 16)).frame(width: 22) }
+                Text(title).font(.system(size: 16)).lineLimit(1)
+                Spacer()
+            }
+            .padding(.horizontal, 16).padding(.vertical, 13)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(.rect)
+            .background(selected ? Color.white.opacity(0.12) : .clear)
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(.white)
+    }
+
+    /// One chat in the list: the same row, named by the chat it opens.
+    private func drawerChat(id: String, title: String, selected: Bool) -> some View {
+        drawerRow(title, "", action: { request = MenuRequest(session: id) }, selected: selected)
+    }
+
+    private func drawerCaption(_ text: String) -> some View {
+        Text(text).font(.footnote).foregroundStyle(.secondary)
+            .padding(.horizontal, 16).padding(.top, 14).padding(.bottom, 4)
+    }
+
     // MARK: transcript
 
     private var transcript: some View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 10) {
-                    ForEach(events.rows) { e in
+                    ForEach(events) { e in
                         EventRow(event: e, api: api, fullPicture: $fullPicture)
                             .id(e.id)
                     }
@@ -285,8 +500,8 @@ struct ChatView: View {
             // bottom UP, belowFold goes false, and nothing is scrolled at all -
             // which is exactly the stillness Alex asked for.
             .onChange(of: belowFold) { _, _ in follow(proxy) }
-            .onChange(of: events.rows.count) { _, _ in follow(proxy) }
-            .onChange(of: events.rows.last?.text) { _, _ in follow(proxy) }
+            .onChange(of: events.count) { _, _ in follow(proxy) }
+            .onChange(of: events.last?.text) { _, _ in follow(proxy) }
             // The keyboard is the third reason the newest line can end up hidden,
             // and the one that was reported: the composer takes the room the live
             // thinking block was using, so the block slides under the fold with no
@@ -581,12 +796,12 @@ struct ChatView: View {
         // back mid-turn, so show it at once - same shape as the web page.
         let echo = paths.isEmpty ? text : text + (text.isEmpty ? "" : "\n") + "[picture]"
         let sent = ChatEvent(kind: .user, text: echo, imagePath: paths.first ?? "")
-        events.rows.append(sent)
+        events.append(sent)
         mine = sent.id          // ...at the TOP, so the transcript fills what is left
-        for p in paths { events.rows.append(ChatEvent(kind: .image, imagePath: p)) }
+        for p in paths { events.append(ChatEvent(kind: .image, imagePath: p)) }
         Task {
             if let problem = await api.send(text: text, paths: paths) {
-                events.rows.append(ChatEvent(kind: .info, text: problem))
+                events.append(ChatEvent(kind: .info, text: problem))
             }
         }
     }
@@ -633,35 +848,212 @@ struct ChatView: View {
         }
     }
 
-    /// The pencil in the bar: a NEW chat, in place (Alex: "3. keep it as it is now").
-    /// The bar says so at once rather than waiting for the Mac to mint an id - a
-    /// chat the server has not written down is exactly what "New chat" means, and
-    /// the room's poll replaces the name with the server's own the moment there is
-    /// one.
     private func newChat() async {
         await api.newChat()
-        events.rows = []
-        events.rows = [ChatEvent(kind: .info, text: "New conversation.")]
-        // The SERVER's session has to go with the transcript: /api/chat reset
-        // leaves `api.session` on the chat that just ended, and the room reads the
-        // open chat off it - so the bar would keep claiming the old chat until the
-        // next poll, and the menu would tick it.
-        api.session = ""
-        chat.id = ""
-        chat.saved = false
-        chat.title = "New chat"
-        await api.refresh()              // the session list (a new chat has no title yet)
+        events = []
+        events = [ChatEvent(kind: .info, text: "New conversation.")]
     }
 
-    /// What the bar reports about the Mac - nothing here loads a chat: WHICH chat
-    /// is open belongs to the room (ChatRoom), which owns the open chat and the
-    /// stream, so that the chat survives this screen being popped and pushed.
+    /// Do ONE thing a drawer row asked for. The request is cleared before the work
+    /// starts (in the body's onChange), so a second tap is a second run rather than
+    /// a repeat of the first. An empty session id is the unsaved chat already on
+    /// screen - there is nothing to load for it, only an empty transcript.
+    private func carry(_ r: MenuRequest) async {
+        if let s = r.screen { path.append(s) }
+        if r.newChat { await newChat() }
+        if let id = r.session {
+            if id.isEmpty { await newChat() } else { await open(id) }
+        }
+    }
+
+    private func open(_ id: String) async {
+        await api.load(session: id)
+        await reload()
+    }
+
     private func reload() async {
         if !api.connected { await api.connect() }
         if let (list, sess) = try? await api.events(session: nil) {
-            events.rows = list
+            events = list
             api.session = sess
             await api.refresh()          // counters, session list, effort
+        }
+    }
+
+    /// The stream replays the turn in flight, so a reconnecting phone rebuilds
+    /// only the live part. The Mac does the grouping (reasoning tokens into one
+    /// thought, content into one answer, a tool call starting a new phase), and
+    /// each batch is MERGED onto the rows already on screen - so what arrives
+    /// joins the bubble it belongs to instead of opening a new one.
+    ///
+    /// The server does NOT say that a replay is a replay: it rebuilds the turn in
+    /// flight from its 'start' event and sends it to every client identically, so
+    /// a client that just connected sees a thought already in progress. `live`
+    /// (which carries nothing but counters) is the one signal reserved for a turn
+    /// actually running, and the server emits the first one 0.15 s after the
+    /// first reasoning token - so its arrival is when the thought on screen can
+    /// honestly start being timed.
+    private func startStream() {
+        api.startStream(onEvents: { batch in
+            for row in batch { merge(row) }
+        }, onLive: { markWatched() }, onStart: {
+            api.busy = true
+            api.liveTokens = 0
+        }, onEnd: {
+            api.busy = false
+            closePhase(everything: true)   // a turn can end mid-thought, mid-answer
+        })
+    }
+
+    /// A recall goes in FRONT of the turn it belongs to, not at the bottom of the
+    /// transcript. A phase continues only while it is the LAST row - that is how
+    /// a streamed thought or answer grows - so appending a recall in the middle
+    /// of one would slice the thought in two, and a step that happened to open
+    /// with reasoning would leave that half stranded below the new row.
+    ///
+    /// The turn is the run of OPEN rows at the end: live, that is the thought or
+    /// the answer being written. In a replay every row of a finished hop is
+    /// closed, so the recall lands after them - which is where it belongs anyway,
+    /// with the rest of that hop.
+    private func insertRecall(_ row: ChatEvent) {
+        var at = events.count
+        while at > 0 && events[at - 1].open { at -= 1 }
+        events.insert(row, at: at)
+    }
+
+    /// One batch of streamed rows onto the transcript. A thought or an answer
+    /// continues the last row of its kind if that is what it is; a tool call
+    /// closes the open thought first, exactly like grow()/endThought() do in the
+    /// browser. Tool arguments are re-sent with every delta, so the last one wins
+    /// rather than being appended - otherwise every token doubles the line.
+    private func merge(_ row: ChatEvent) {
+        switch row.kind {
+        case .answer where row.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty:
+            return                                   // invisible, as the page hides it
+        case .thought, .answer:
+            if let last = events.last, last.kind == row.kind, last.open {
+                events[events.count - 1].text += row.text
+                return
+            }
+            closePhase()                             // a new thought folds the old one
+            var fresh = row
+            fresh.open = true
+            events.append(fresh)
+        case .recall:
+            insertRecall(row)
+        case .tool:
+            closePhase()
+            // Arguments are re-sent as they stream, so a call already on screen
+            // is UPDATED in place: the row stays one, and its name is what
+            // identifies it when the stream carries no call id.
+            if let i = toolRow(for: row) {
+                events[i].text = row.text
+                if row.view != nil { events[i].view = row.view }
+                return
+            }
+            events.append(row)
+        case .result:
+            closePhase()
+            // A result joins the call above it (one row per call). With no call
+            // to join it keeps its own row, folded as it always was.
+            guard let i = toolRow(for: nil) else { events.append(row); return }
+            // The live output was the RUNNING command's; the result replaces it
+            // (the row draws the result's own rows from here on), so the copy
+            // goes rather than sitting under the finished output.
+            events[i].liveRows = []
+            // The verdict was already read off this event while it was decoded,
+            // when its call was in the same batch; a result that arrived alone
+            // (the call long drawn) is judged here, by the same rule.
+            let good = row.ok ?? Self.succeeded(row)
+            events[i].ok = good
+            // A good edit said what happened in its chip; a failure says it here
+            // and nowhere else, so it is kept whatever the view claims.
+            events[i].result = good && ToolView.speaksForItself(row.view) ? "" : row.text
+            // The call's view DESCRIBES the row (an edit's chip and diff), the
+            // result's only reports ("ok", true): never overwrite the former -
+            // except for a read, whose content only exists in the result.
+            events[i].view = ToolView.describedBy(events[i].view, row.view)
+        case .output:
+            // A command printing WHILE it runs. It lands on the row its call
+            // opened and nowhere else: the whole output so far REPLACES the copy
+            // there, because the Mac re-sends all of it every time - so a report
+            // this app missed is corrected by the next one, and there is no
+            // accumulation to keep in step. No call on screen (a list starting
+            // with an output event) means nothing to draw on.
+            //
+            // The lookup passes the ROW, so the provider's call id decides: two
+            // commands in one turn are two rows, and a report must not fill the
+            // wrong one - the same id rule that pairs a result with its call.
+            guard let i = toolRow(for: row) else { return }
+            events[i].liveRows = row.liveRows
+        default:
+            closePhase()
+            events.append(row)
+        }
+    }
+
+    /// The row a tool event belongs to. A CALL continues the row just drawn if
+    /// it is the same call - by the provider's id when both have one, otherwise
+    /// by name, since the arguments are re-sent as they stream in. A RESULT
+    /// belongs to the call above it, which is either the call this app just drew
+    /// or, in a stored session replayed as a flat list, the one before it.
+    private func toolRow(for row: ChatEvent?) -> Int? {
+        guard let last = events.indices.last, events[last].kind == .tool else { return nil }
+        guard let row else { return last }
+        if !row.callId.isEmpty && !events[last].callId.isEmpty {
+            return row.callId == events[last].callId ? last : nil
+        }
+        return events[last].name == row.name ? last : nil
+    }
+
+    /// Did a tool result succeed? The event says it in two places and BOTH are
+    /// needed: the Mac's view, when the tool has one, and the plain text, which
+    /// is all a tool without a view has. A result that reports neither ("OK: 7
+    /// tests passed") has succeeded - so the test is for the two ways it can say
+    /// no, and everything else is a yes. Reading it as "yes only on a known ok"
+    /// was how a failed call came back wearing a tick: the server's view for a
+    /// plain tool is {} and the text was the only evidence there was.
+    static func succeeded(_ e: ChatEvent) -> Bool {
+        if e.view?.ok == false { return false }
+        let t = e.text.trimmingCharacters(in: .whitespaces)
+        return !t.hasPrefix("Error") && !t.hasPrefix("Not run")
+    }
+
+    /// The turn really is running on the Mac now (the stream's `live` counters),
+    /// so the thought it is writing may be timed from here. Everything before
+    /// this arrived as a replay of words already written, which is why showing up
+    /// in the middle of a thought leaves it unwatched - and, when it folds, with
+    /// no duration rather than a fabricated "1s".
+    private func markWatched() {
+        for i in events.indices where events[i].open && events[i].kind == .thought && !events[i].watched {
+            events[i].started = Date()
+            events[i].watched = true
+        }
+    }
+
+    /// A phase boundary: a tool call, a result, or the end of the turn. The
+    /// thought that was streaming folds into one dim line (with its duration, if
+    /// this app was watching when it started), and on a finished turn nothing
+    /// keeps taking text - so the next turn cannot append to a bubble from the
+    /// previous one.
+    private func closePhase(everything: Bool = false) {
+        for i in events.indices where events[i].open {
+            if events[i].kind == .thought {
+                events[i].open = false
+                // A duration needs a clock that started while the thought was
+                // still being written (markWatched) and at least two seconds of
+                // it; anything else - a thought that arrived folded with a
+                // reopened session, or one this app caught mid-flight - says
+                // "thought" instead of inventing a number. Timing it from the
+                // moment its rows were decoded is what made every line read
+                // "thought for 1s".
+                if events[i].watched {
+                    let secs = Int(Date().timeIntervalSince(events[i].started))
+                    if secs >= 2 { events[i].secs = secs }
+                }
+            } else if everything {
+                events[i].open = false
+            }
         }
     }
 }
@@ -1452,7 +1844,7 @@ private struct TranscriptScroll: ViewModifier {
 }
 
 // MARK: - Liquid Glass
-/// The bottom bar (stats strip + composer) on the scroll view's edge.
+/// The two bars on the scroll view's edges.
 ///
 /// `safeAreaBar` is iOS 26 only, and it is what puts a bar ON TOP of scrolling
 /// content: it insets the scroll view's safe area and adds the scroll edge effect
@@ -1461,15 +1853,17 @@ private struct TranscriptScroll: ViewModifier {
 /// and a missing symbol is an error even inside #available) and the OS one.
 ///
 /// Before 26 there is no safeAreaBar, so the old layout is kept: a VStack with
-/// the bar as an ordinary row.
-private struct BarsOverTranscript<B: View>: ViewModifier {
+/// the bars as ordinary rows.
+private struct BarsOverTranscript<H: View, B: View>: ViewModifier {
     let glass: Bool
+    let header: H
     let bottom: B
 
     func body(content: Content) -> some View {
         #if compiler(>=6.2)
         if glass, #available(iOS 26.0, *) {
             content
+                .safeAreaBar(edge: .top, spacing: 0) { header }
                 .safeAreaBar(edge: .bottom, spacing: 0) { bottom }
         } else {
             legacy(content)
@@ -1479,21 +1873,38 @@ private struct BarsOverTranscript<B: View>: ViewModifier {
         #endif
     }
 
-    /// iOS 17-18: the composer is the last row of a VStack, the transcript a plain
-    /// area above it. The TOP bar is not here at all any more: navigationTitle and
-    /// the system bar replaced the hand-built header on every OS (see the top of
-    /// ChatView), and the system bar is what gives the screen its back button and
-    /// its edge swipe.
+    /// iOS 17-18: the bars are rows of a VStack, the transcript a plain area.
     private func legacy(_ content: Content) -> some View {
         VStack(spacing: 0) {
+            header
             content
             bottom
         }
     }
 }
 
+/// A button in a bar.
 extension View {
-    /// The surface of the composer, on the view's whole frame including
+    @ViewBuilder func barButton(_ glass: Bool) -> some View {
+        if glass {
+            #if compiler(>=6.2)
+            // The compiler gate says the SDK HAS .glass; this one says the OS is
+            // new enough to RUN it. Both are needed - dropping this check is a
+            // compile error, not a fallback.
+            if #available(iOS 26.0, *) {
+                self.buttonStyle(.glass)
+            } else {
+                self.buttonStyle(.bordered)
+            }
+            #else
+            self.buttonStyle(.bordered)
+            #endif
+        } else {
+            self.buttonStyle(.borderless)
+        }
+    }
+
+    /// The surface of a bar or the composer, on the view's whole frame including
     /// its padding - so pad first and call this last. A flat fill before iOS 26,
     /// Liquid Glass on it.
     func glassBar(_ glass: Bool, radius: CGFloat, fallback: Color, tint: Color? = nil) -> some View {
