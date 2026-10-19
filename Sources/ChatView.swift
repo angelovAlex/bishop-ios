@@ -487,7 +487,8 @@ struct ChatView: View {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 10) {
                     ForEach(events) { e in
-                        EventRow(event: e, api: api, fullPicture: $fullPicture)
+                        EventRow(event: e, api: api, fullPicture: $fullPicture,
+                                 onOpenSession: { request = MenuRequest(session: $0) })
                             .id(e.id)
                     }
                     if !api.connected {
@@ -1167,6 +1168,9 @@ struct EventRow: View {
     let event: ChatEvent
     let api: BishopAPI
     @Binding var fullPicture: String?
+    /// Open another conversation from a ROW (a subagent's line): the chat's own
+    /// route, so a tap on one is treated exactly like a tap on it in the drawer.
+    var onOpenSession: (String) -> Void = { _ in }
 
     var body: some View {
         switch event.kind {
@@ -1262,7 +1266,17 @@ struct EventRow: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         case .info:
-            Text(event.text).font(.system(size: 12, design: .monospaced)).foregroundStyle(.gray)
+            if event.session.isEmpty {
+                Text(event.text).font(.system(size: 12, design: .monospaced)).foregroundStyle(.gray)
+            } else {
+                // A SUBAGENT's row (BishopAPI's "subagent" case): one quiet line,
+                // and the id is a way IN to the conversation it worked in - which is
+                // where the working-out is, since its one answer is all that comes
+                // back here. Tapping it asks for that chat through the SAME route a
+                // drawer row takes (MenuRequest), so what an id means stays written
+                // once (carry(_:)).
+                SubagentRow(text: event.text, session: event.session) { onOpenSession(event.session) }
+            }
         case .error:
             Text("Error: \(event.text)").font(.system(size: 13, design: .monospaced))
                 .foregroundStyle(Color(red: 1, green: 0.6, blue: 0.6))
@@ -1280,6 +1294,37 @@ struct EventRow: View {
                                                   options: [.prettyPrinted, .withoutEscapingSlashes]),
               let t = String(data: p, encoding: .utf8) else { return nil }
         return t
+    }
+}
+
+/// A SUBAGENT's line: one quiet row in the transcript of the chat that asked for
+/// it, saying what the child was asked and what it answered - and OPENING the
+/// child's own conversation on a tap.
+///
+/// The tap is the whole reason this is a row of its own rather than an .info line:
+/// a subagent's answer comes back as ONE compact reply on purpose (that is what
+/// keeps the parent's context from filling with work it does not need), so the
+/// working-out it did instead lives in its transcript - logs/history_<child>.json,
+/// which the Mac serves like any other chat. Two taps is the difference between
+/// "it said 412 files" and being able to check why.
+struct SubagentRow: View {
+    let text: String
+    let session: String
+    let onOpen: () -> Void              // the chat's own, so a subagent is opened like any other chat
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 6) {
+            Image(systemName: "person.2.wave.2")
+                .font(.system(size: 10))
+                .foregroundStyle(.gray)
+                .padding(.top, 2)
+            Text(text)
+                .font(.system(size: 12, design: .monospaced))
+                .foregroundStyle(.gray)
+                .underline()
+        }
+        .contentShape(Rectangle())
+        .onTapGesture { onOpen() }
     }
 }
 

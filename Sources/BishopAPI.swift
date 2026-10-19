@@ -38,6 +38,11 @@ struct ChatEvent: Identifiable {
     var started = Date()
     var view: ToolView?         // how the Mac wants this tool row DRAWN, if it wants more than text
     var callId = ""             // the provider's tool call id, so a result finds its call
+    /// Which CONVERSATION this row is about, when it is not the one on screen: a
+    /// subagent works in a chat of its own, and the row saying so carries its id -
+    /// which is a way into that transcript (see SubagentRow), the thing its one
+    /// answer deliberately leaves out.
+    var session = ""
     /// A command's output SO FAR, while it runs: the rows a `tool_output` event
     /// carries, which REPLACE the previous ones (the Mac re-sends the whole
     /// output every time, so a report that was missed costs nothing). It is what
@@ -527,6 +532,26 @@ final class BishopAPI: ObservableObject {
                                      imagePath: e["path"] as? String ?? ""))
             case "info":
                 out.append(ChatEvent(kind: .info, text: e["text"] as? String ?? ""))
+            case "subagent":
+                // A subagent's two lives: it was asked (its task), and it answered -
+                // and both carry the id of the CONVERSATION it worked in. Deliberately
+                // an .info row, the shape this app already draws for a line that is
+                // not the answer: a subagent's work belongs in the transcript ("is
+                // Bishop still busy with that?") without its one answer, which is
+                // ALSO in the tool result above it, being said twice here.
+                let sid = e["child"] as? String ?? ""
+                let task = (e["task"] as? String ?? "").replacingOccurrences(of: "\n", with: " ")
+                let result = (e["result"] as? String ?? "").replacingOccurrences(of: "\n", with: " ")
+                if (e["state"] as? String) == "started" {
+                    out.append(ChatEvent(kind: .info,
+                                         text: "subagent \(sid) was asked: \(task)", session: sid))
+                } else {
+                    let secs = e["seconds"] as? Double
+                    let how = secs.map { String(format: " in %.1fs", $0) } ?? ""
+                    let mark = (e["state"] as? String) == "error" ? "failed" : "finished"
+                    out.append(ChatEvent(kind: .info,
+                                         text: "subagent \(sid) \(mark)\(how): \(result)", session: sid))
+                }
             case "error":
                 out.append(ChatEvent(kind: .error, text: e["text"] as? String ?? ""))
             default: break          // start / end / live / usage / busy are not rows
