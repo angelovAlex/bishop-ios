@@ -59,6 +59,16 @@ struct ChatView: View {
                     .navigationDestination(for: Screen.self) { s in
                         switch s {
                         case .settings: SettingsView(api: api)
+                        case .jobs: JobsView(api: api, open: { sid in
+                            // A run's transcript IS a chat, and the chat is the ROOT of
+                            // this stack: opening one means clearing the pushed screens
+                            // and asking the chat to load that session - which is one
+                            // outline of the app, not two that could disagree about
+                            // what a session is (see carry() and open()).
+                            path.removeAll()
+                            Task { await open(sid) }
+                        }, openJob: { path.append(.job($0)) })
+                        case .job(let id): JobDetailView(api: api, id: id)
                         }
                     }
             }
@@ -78,7 +88,22 @@ struct ChatView: View {
             // scrim's tap that did that, and there is no scrim any more: the tap is
             // simultaneous so a tap meant for a chip in the transcript is not
             // swallowed by it.
-            .simultaneousGesture(TapGesture().onEnded { if sidebar { open(false) } })
+            //
+            // ENABLED ONLY WHILE THE DRAWER IS OPEN, and that is not a refinement - it
+            // is the fix for a real bug. A whole-screen `simultaneousGesture` on this
+            // stack swallows the taps meant for a Form's OWN buttons; measured on the
+            // simulator: with it always on, a tap on JobsView's Save and on the Settings
+            // screen's button did NOTHING (no request left the app, the button never
+            // highlighted), and the very same tap worked the instant the gesture was
+            // removed. The button and the gesture both want the single tap and the
+            // ancestor wins.
+            //
+            // Its one job is to close the drawer, which only matters while the drawer IS
+            // open, so `including:` is the right instrument rather than an animation
+            // trick: with the drawer closed the mask is .none, the gesture is not
+            // installed, and a Form button is left alone.
+            .simultaneousGesture(TapGesture().onEnded { open(false) },
+                                 including: sidebar ? .all : .none)
             // A shadow off the chat's leading edge separates the two layers - it is
             // only drawn while the panel is open, or it would ring the closed chat's
             // screen edges too.
@@ -264,7 +289,7 @@ struct ChatView: View {
     /// A screen the chat can push. The stack's path is what pushes it: a
     /// `NavigationLink` inside a menu of rows highlights its row and pushes
     /// NOTHING (verified on the simulator, twice), and this cannot silently fail.
-    enum Screen: Hashable { case settings }
+    enum Screen: Hashable { case settings, jobs, job(String) }
 
     /// The drawer: the chats, then the app's own furniture. This is what the
     /// reference app (Gemini) opens from the button at the top left, and it
@@ -388,6 +413,10 @@ struct ChatView: View {
             drawerRow("New chat", "square.and.pencil",
                       action: { request = MenuRequest(newChat: true) }, selected: true)
             drawerRow("Settings", "gearshape", action: { request = MenuRequest(screen: .settings) })
+            // What the Mac is doing on its own. Next to Settings because it is the
+            // app's own furniture rather than a chat: a job and its runs are not a
+            // conversation the reader is having (see JobsView).
+            drawerRow("Jobs", "clock.arrow.circlepath", action: { request = MenuRequest(screen: .jobs) })
 
             // The chat list is the part that scrolls: a hundred conversations must
             // not push the rows above off the top of the panel. It has to be told to be

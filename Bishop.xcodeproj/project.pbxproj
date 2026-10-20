@@ -11,6 +11,7 @@
 		54D147263B93613307370F1C /* BishopApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 77A16C71A885F0D29324B257 /* BishopApp.swift */; };
 		6C9B07455E1C9B2256ED8E00 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 9F7671721F5BB6BF4B8827A4 /* Assets.xcassets */; };
 		909E72EB665780FF8F806786 /* BishopAPI.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6730706CF0F861E13C2C29F3 /* BishopAPI.swift */; };
+		9A1F4C77D2E34B5A9C7F0E01 /* JobsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A1F4C77D2E34B5A9C7F0E02 /* JobsView.swift */; };
 		979FF8F16C509DD1D0C4B66A /* ChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 145647177182283C147488DA /* ChatView.swift */; };
 		D187543EEEBF13D29BD15966 /* StreamClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7FEC494FF232A248E7256004 /* StreamClient.swift */; };
 /* End PBXBuildFile section */
@@ -20,6 +21,7 @@
 		145647177182283C147488DA /* ChatView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatView.swift; sourceTree = "<group>"; };
 		3C6CECA2E9A75FB855534DDD /* Bishop.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Bishop.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		6730706CF0F861E13C2C29F3 /* BishopAPI.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BishopAPI.swift; sourceTree = "<group>"; };
+		9A1F4C77D2E34B5A9C7F0E02 /* JobsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JobsView.swift; sourceTree = "<group>"; };
 		77A16C71A885F0D29324B257 /* BishopApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BishopApp.swift; sourceTree = "<group>"; };
 		7FEC494FF232A248E7256004 /* StreamClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StreamClient.swift; sourceTree = "<group>"; };
 		9F7671721F5BB6BF4B8827A4 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
@@ -51,6 +53,7 @@
 				77A16C71A885F0D29324B257 /* BishopApp.swift */,
 				145647177182283C147488DA /* ChatView.swift */,
 				F47C878F47EA2A7B724EBDC6 /* Info.plist */,
+				9A1F4C77D2E34B5A9C7F0E02 /* JobsView.swift */,
 				07C96F743FB30EE5CC7B85F3 /* SettingsView.swift */,
 				7FEC494FF232A248E7256004 /* StreamClient.swift */,
 			);
@@ -129,6 +132,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				909E72EB665780FF8F806786 /* BishopAPI.swift in Sources */,
+				9A1F4C77D2E34B5A9C7F0E01 /* JobsView.swift in Sources */,
 				54D147263B93613307370F1C /* BishopApp.swift in Sources */,
 				979FF8F16C509DD1D0C4B66A /* ChatView.swift in Sources */,
 				46D93FA545C430789B73F2C2 /* SettingsView.swift in Sources */,

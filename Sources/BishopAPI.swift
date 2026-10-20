@@ -9,10 +9,15 @@
 //    GET  /api/state              session + transcript + usage + effort
 //    GET  /api/sessions           recent sessions for the picker
 //    GET  /api/events             the transcript rebuilt from the logs
+//    GET  /api/jobs               the background jobs + their activity log
 //    GET  /api/image?p=<path>     one picture
 //    GET  /api/stream             server-sent events: the live turn
 //    POST /api/chat               {text|paths|session|reset} - starts/queues a turn
 //    POST /api/upload             raw image bytes -> saved path
+//    POST /api/jobs/save          {job, plus any of system_prompt|input|interval_seconds|
+//                                  enabled|next_run}
+//    POST /api/jobs/run           {job} -> {session}
+//    POST /api/jobs/delete        {job}
 //    POST /api/effort             {effort}
 //    POST /api/speech/stop        shut Bishop up
 //    POST /api/chat/stop          stop the turn in flight
@@ -197,6 +202,94 @@ struct ToolView {
 struct SessionInfo: Identifiable, Hashable {
     var id: String
     var title: String
+}
+
+/// A background job, as GET /api/jobs reports it. A job is name + system prompt +
+/// input + an interval: every `interval_seconds` the Mac runs `input` in a chat
+/// whose system prompt is `system_prompt`, without anyone asking.
+///
+/// `due_in` and `running` are computed by the SERVER at the moment of the reply -
+/// it is the one that owns the clock and the queue - so the app shows the countdown
+/// it was handed rather than deriving one from `next_run` against its own clock.
+/// The one exception is the countdown ticking DOWN between fetches: see due().
+struct Job: Identifiable, Hashable {
+    var id: String
+    var name = ""
+    var system_prompt = ""
+    var input = ""
+    var interval_seconds = 0
+    /// "fresh" - every run is a chat of its own. "thread" - every run continues one
+    /// chat, the one in `session`, so the job has a memory of its own runs.
+    var mode = "fresh"
+    var enabled = false
+    var owner = ""
+    var session: String?            // the chat a "thread" job runs on, once it has one
+    var created = 0.0
+    var last_run: Double?
+    var next_run: Double?
+    var running = false             // a run of it is queued or in flight right now
+    var due_in = 0                  // seconds until its next run, from the SERVER's clock
+    /// Sent back by a save, whose reply is the UPDATED record: keep the two figures
+    /// the server computes (they are not in a save's reply) rather than losing them,
+    /// or a job goes from "in 12m" to "no schedule" the moment it is toggled.
+    init?(_ d: [String: Any]?) {
+        guard let d, let id = d["id"] as? String else { return nil }
+        self.id = id
+        name = d["name"] as? String ?? ""
+        system_prompt = d["system_prompt"] as? String ?? ""
+        input = d["input"] as? String ?? ""
+        interval_seconds = d["interval_seconds"] as? Int ?? 0
+        mode = d["mode"] as? String ?? "fresh"
+        enabled = d["enabled"] as? Bool ?? false
+        owner = d["owner"] as? String ?? ""
+        session = d["session"] as? String
+        created = d["created"] as? Double ?? 0
+        last_run = d["last_run"] as? Double
+        next_run = d["next_run"] as? Double
+        running = d["running"] as? Bool ?? false
+        due_in = d["due_in"] as? Int ?? 0
+    }
+}
+
+/// One line of the activity log: a run of a job that was queued, finished, failed,
+/// or came round while the Mac was asleep and was missed. `session` is the chat the
+/// run happened in - the way into that run's transcript, and the reason a row is
+/// worth tapping.
+struct ActivityRow: Identifiable {
+    let id = UUID()
+    var ts = 0.0
+    var job = ""
+    var name = ""
+    var session = ""
+    var state = ""                  // queued | done | error | missed
+    var seconds: Double?            // nil while queued
+    var detail = ""
+    init(_ d: [String: Any]) {
+        ts = d["ts"] as? Double ?? 0
+        job = d["job"] as? String ?? ""
+        name = d["name"] as? String ?? ""
+        session = d["session"] as? String ?? ""
+        state = d["state"] as? String ?? ""
+        seconds = d["seconds"] as? Double
+        detail = d["detail"] as? String ?? ""
+    }
+}
+
+/// Everything GET /api/jobs answers with, in one reply - it is one view on the Mac
+/// too (jobs.ui_state), so one fetch has to fill both halves of the screen.
+struct JobsState {
+    var jobs: [Job] = []
+    var activity: [ActivityRow] = []
+    var ticking = false             // is THIS Mac server the one running the schedule
+    var now = 0.0                   // the server's clock, when it answered
+    var tick = 0                    // how often it wakes, in seconds
+    init(_ d: [String: Any]) {
+        jobs = (d["jobs"] as? [[String: Any]] ?? []).compactMap { Job($0) }
+        activity = (d["activity"] as? [[String: Any]] ?? []).map { ActivityRow($0) }
+        ticking = d["ticking"] as? Bool ?? false
+        now = d["now"] as? Double ?? 0
+        tick = d["tick"] as? Int ?? 30
+    }
 }
 
 struct UsageStats {
@@ -618,6 +711,35 @@ final class BishopAPI: ObservableObject {
     func refresh() async {
         guard connected, let s = try? await get("/api/state") else { return }
         applyState(s)
+    }
+
+    // MARK: background jobs
+
+    /// The jobs and their activity log. Throws rather than answering nil, so the
+    /// screen can say WHY it is empty - "no jobs" and "the Mac is not answering"
+    /// are different truths and a list shows them the same way otherwise.
+    func jobs() async throws -> JobsState {
+        JobsState(try await get("/api/jobs"))
+    }
+
+    /// Run a job now. The Mac queues it on the same path the tick uses and answers
+    /// with the session it will run in - which is a chat this app can open.
+    @discardableResult
+    func jobRun(_ id: String) async throws -> String {
+        (try await post("/api/jobs/run", ["job": id]))["session"] as? String ?? ""
+    }
+
+    /// Change what a person edits about a job. A change that touches the SCHEDULE
+    /// (interval, next_run, enabled) while a run of it is in flight comes back 409
+    /// with the reason - so the caller has to be ready to show one and reload.
+    @discardableResult
+    func jobSave(_ id: String, _ fields: [String: Any]) async throws -> Job {
+        let r = try await post("/api/jobs/save", ["job": id].merging(fields) { a, _ in a })
+        return Job(r["job"] as? [String: Any]) ?? Job(["id": id])!
+    }
+
+    func jobDelete(_ id: String) async throws {
+        _ = try await post("/api/jobs/delete", ["job": id])
     }
 
     // MARK: the live stream
