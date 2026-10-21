@@ -172,10 +172,12 @@ struct JobsView: View {
             }
             Spacer()
             Text(r.state).font(.caption2.weight(.medium)).foregroundStyle(stateColor(r.state))
-            // The run's PROMPT tokens, before its seconds: how big the context it had to
-            // read was. Absent on a level-0 run (no model, no tokens) and on lines
-            // written before the server started recording them.
-            if let n = r.tokens?["prompt"], n > 0 {
+            // THE CONTEXT the run had to read - the LAST call's prompt, which is how big
+            // the conversation is. Not "prompt", which sums every call of the run: a
+            // thread job's 4 calls made a 38k-token conversation read as 110k, and that
+            // row was taken for the size of the mind's memory. Falls back to "prompt" on
+            // lines written before the server reported the two apart.
+            if let n = r.tokens?["context"] ?? r.tokens?["prompt"], n > 0 {
                 Text(jobTokens(n)).font(.caption2.monospacedDigit())
                     .foregroundStyle(.tertiary)
             }
