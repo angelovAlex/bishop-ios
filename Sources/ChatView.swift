@@ -1786,11 +1786,16 @@ struct EditChip: View {
                     .background(Color(white: 0.1))
                     .clipShape(RoundedRectangle(cornerRadius: 6))
                     .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Color(white: 0.2)))
-                    .onTapGesture { toggle() }
                     if !span.isEmpty {
                         Text(span).font(.system(size: 12)).foregroundStyle(Color(white: 0.42))
                     }
                 }
+                // THE WHOLE ROW OPENS THE FOLD, not just the box. The tap used to sit
+                // on the box alone, so pressing the label ("Ran"), the tick or the
+                // duration did nothing - measured on the simulator, where a tap on
+                // the row's own text left the fold shut. Alex taps a row, not a box.
+                .contentShape(Rectangle())
+                .onTapGesture { toggle() }
             }
             // What a search did NOT cover ("hidden folders skipped; result limit
             // reached"), or why a command was killed. It is outside the fold on

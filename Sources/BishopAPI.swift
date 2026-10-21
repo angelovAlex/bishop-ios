@@ -168,11 +168,21 @@ struct ToolView {
     }
 
     /// Does the row already say what the result would say? Then the result's own
-    /// text is dropped: for a good edit or read the chip carries it, and the
-    /// text is the whole file. A FAILED one is the only place the reason exists,
-    /// so it is never dropped - the caller asks only when `good`.
+    /// text is dropped: for a good edit or read the chip carries it in its rows,
+    /// and the text is the whole file. A FAILED one is the only place the reason
+    /// exists, so it is never dropped - the caller asks only when `good`.
+    ///
+    /// The test is whether the row CARRIES THE CONTENT, not whether it has a view
+    /// of some kind. It used to be "has a describing view", which is true of an
+    /// UNSTYLED row too - and that row's view holds a name and a duration, nothing
+    /// else. So every plain tool's answer was thrown away and its fold showed the
+    /// arguments and no result at all, which is exactly what Alex reported on
+    /// 2026-10-20: "other tool calls when I press on them shows only input params,
+    /// but should also show output". A view speaks for itself only when it has
+    /// rows to speak with (a diff, a file, hits, a command's output), or when its
+    /// whole content is the verdict ("ok").
     static func speaksForItself(_ v: ToolView?) -> Bool {
-        describes(v) || v?.kind == "ok"
+        v?.kind == "ok" || !(v?.rows.isEmpty ?? true)
     }
 
     /// One event field's rows, however the front end spelled it - used both for the
