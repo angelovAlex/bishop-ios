@@ -229,6 +229,9 @@ struct Job: Identifiable, Hashable {
     var next_run: Double?
     var running = false             // a run of it is queued or in flight right now
     var due_in = 0                  // seconds until its next run, from the SERVER's clock
+    /// "tool" (0), "task" (1) or "think" (2) - see jobs.LEVELS. The default is what a
+    /// record written before levels existed is, and it is what that record still runs as.
+    var level = "task"
     /// Sent back by a save, whose reply is the UPDATED record: keep the two figures
     /// the server computes (they are not in a save's reply) rather than losing them,
     /// or a job goes from "in 12m" to "no schedule" the moment it is toggled.
@@ -248,6 +251,7 @@ struct Job: Identifiable, Hashable {
         next_run = d["next_run"] as? Double
         running = d["running"] as? Bool ?? false
         due_in = d["due_in"] as? Int ?? 0
+        level = d["level"] as? String ?? "task"
     }
 }
 
@@ -264,6 +268,11 @@ struct ActivityRow: Identifiable {
     var state = ""                  // queued | done | error | missed
     var seconds: Double?            // nil while queued
     var detail = ""
+    /// Which of the three levels ran: "tool" (0, a sense, no model), "task" (1) or
+    /// "think" (2, the mind). The server always sends one - it fills it in for lines
+    /// older than levels - so a missing value here means an old SERVER, and the
+    /// default is what such a run was.
+    var level = "task"
     init(_ d: [String: Any]) {
         ts = d["ts"] as? Double ?? 0
         job = d["job"] as? String ?? ""
@@ -272,6 +281,7 @@ struct ActivityRow: Identifiable {
         state = d["state"] as? String ?? ""
         seconds = d["seconds"] as? Double
         detail = d["detail"] as? String ?? ""
+        level = d["level"] as? String ?? "task"
     }
 }
 

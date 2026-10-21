@@ -124,6 +124,10 @@ struct JobsView: View {
     private func jobRow(_ j: Job) -> some View {
         VStack(alignment: .leading, spacing: 3) {
             HStack(spacing: 6) {
+                Text(jobLevelTag(j.level)).font(.caption2.monospaced().weight(.semibold))
+                    .foregroundStyle(jobLevelColor(j.level))
+                    .padding(.horizontal, 4).padding(.vertical, 1)
+                    .background(Color.secondary.opacity(0.15), in: RoundedRectangle(cornerRadius: 4))
                 Text(j.name).font(.system(size: 15, weight: .semibold))
                 if j.running { ProgressView().controlSize(.mini) }
                 Spacer()
@@ -131,7 +135,8 @@ struct JobsView: View {
                                                              : "paused"))
                     .font(.caption).foregroundStyle(j.enabled ? Color.secondary : Color.orange)
             }
-            Text("every \(jobSpan(j.interval_seconds)) \u{00B7} \(j.mode) mode"
+            Text("every \(jobSpan(j.interval_seconds)) \u{00B7} "
+                 + jobLevelWords(j.level, mode: j.mode)
                  + (j.last_run.map { " \u{00B7} last ran \(jobCountdown(Int(state?.now ?? 0) - Int($0))) ago" } ?? "")
                  + (j.owner.isEmpty ? "" : " \u{00B7} \(j.owner)"))
                 .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
@@ -156,7 +161,11 @@ struct JobsView: View {
             Text(jobClock(r.ts)).font(.system(size: 12, design: .monospaced))
                 .foregroundStyle(.secondary)
             VStack(alignment: .leading, spacing: 1) {
-                Text(r.name).font(.system(size: 13))
+                HStack(spacing: 5) {
+                    Text(jobLevelTag(r.level)).font(.caption2.monospaced().weight(.semibold))
+                        .foregroundStyle(jobLevelColor(r.level))
+                    Text(r.name).font(.system(size: 13))
+                }
                 if !r.detail.isEmpty {
                     Text(r.detail).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
                 }
@@ -310,7 +319,8 @@ struct JobDetailView: View {
                      : ((job?.enabled ?? false) ? "On - next in \(jobCountdown(job?.due_in ?? 0))"
                                                 : "Paused"))
                 Spacer()
-                Text(job?.mode ?? "").font(.caption).foregroundStyle(.secondary)
+                Text(jobLevelWords(job?.level ?? "task", mode: job?.mode ?? ""))
+                    .font(.caption).foregroundStyle(.secondary)
             }
             if let j = job {
                 Text(j.id).font(.caption2.monospaced()).foregroundStyle(.secondary)
@@ -394,6 +404,37 @@ struct JobDetailView: View {
 }
 
 // MARK: - the figures, spelled the way the page spells them
+
+/// A level as the page names it: "L0", "L1", "L2". Short on purpose - it sits in a
+/// row beside a name, and the interesting part is the difference, not the word.
+func jobLevelTag(_ level: String) -> String {
+    switch level {
+    case "tool": return "L0"
+    case "think": return "L2"
+    default: return "L1"
+    }
+}
+
+/// What a run of that level IS, in the page's words: a sense with no model, an
+/// ordinary task in its mode, or the mind thinking. Used where there is room for a
+/// phrase rather than a tag.
+func jobLevelWords(_ level: String, mode: String) -> String {
+    switch level {
+    case "tool": return "level 0 - no model"
+    case "think": return "level 2 - thinking"
+    default: return "level 1 - \(mode) mode"
+    }
+}
+
+/// A level's colour: a sense is deliberately dim (it is the quiet half of the house),
+/// the mind takes the accent, and a task - the ordinary case - stays plain.
+func jobLevelColor(_ level: String) -> Color {
+    switch level {
+    case "tool": return .secondary
+    case "think": return .accentColor
+    default: return .primary
+    }
+}
 
 /// An interval as a length of time: "5m", "2h", "1d". Seconds when nothing divides
 /// it, which is what an odd interval gets instead of being rounded into a lie.
