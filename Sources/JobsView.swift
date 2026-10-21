@@ -172,6 +172,13 @@ struct JobsView: View {
             }
             Spacer()
             Text(r.state).font(.caption2.weight(.medium)).foregroundStyle(stateColor(r.state))
+            // The run's PROMPT tokens, before its seconds: how big the context it had to
+            // read was. Absent on a level-0 run (no model, no tokens) and on lines
+            // written before the server started recording them.
+            if let n = r.tokens?["prompt"], n > 0 {
+                Text(jobTokens(n)).font(.caption2.monospacedDigit())
+                    .foregroundStyle(.tertiary)
+            }
             if let s = r.seconds { Text(jobSecs(s)).font(.caption2).foregroundStyle(.secondary) }
             if !r.session.isEmpty {
                 Image(systemName: "chevron.right").font(.caption2).foregroundStyle(.tertiary)
@@ -465,6 +472,14 @@ func jobClock(_ ts: Double) -> String {
 }
 
 /// How long a run took: seconds under a minute, then minutes and seconds.
+/// A prompt size as a row can carry it: "1.33M", "29.7k", "812".
+func jobTokens(_ n: Int) -> String {
+    if n >= 1_000_000 { return String(format: "%.2fM", Double(n) / 1_000_000) }
+    if n >= 100_000 { return "\(n / 1000)k" }
+    if n >= 1_000 { return String(format: "%.1fk", Double(n) / 1_000) }
+    return "\(n)"
+}
+
 func jobSecs(_ s: Double) -> String {
     let n = Int(s.rounded())
     if n < 60 { return "\(n)s" }

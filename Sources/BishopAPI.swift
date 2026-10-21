@@ -262,6 +262,7 @@ struct Job: Identifiable, Hashable {
         running = d["running"] as? Bool ?? false
         due_in = d["due_in"] as? Int ?? 0
         level = d["level"] as? String ?? "task"
+        tokens = (d["tokens"] as? [String: Any])?.compactMapValues { $0 as? Int }
     }
 }
 
@@ -283,6 +284,10 @@ struct ActivityRow: Identifiable {
     /// older than levels - so a missing value here means an old SERVER, and the
     /// default is what such a run was.
     var level = "task"
+    /// What THIS run spent, when a model was billed for it: prompt (the whole prompt,
+    /// cache hits included), billed (prompt minus cache), cached, out, calls. Absent
+    /// on a level-0 run - a sense calls no model - and on lines older than this field.
+    var tokens: [String: Int]?
     init(_ d: [String: Any]) {
         ts = d["ts"] as? Double ?? 0
         job = d["job"] as? String ?? ""
@@ -292,6 +297,7 @@ struct ActivityRow: Identifiable {
         seconds = d["seconds"] as? Double
         detail = d["detail"] as? String ?? ""
         level = d["level"] as? String ?? "task"
+        tokens = (d["tokens"] as? [String: Any])?.compactMapValues { $0 as? Int }
     }
 }
 
