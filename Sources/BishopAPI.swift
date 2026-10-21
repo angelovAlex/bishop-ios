@@ -262,7 +262,6 @@ struct Job: Identifiable, Hashable {
         running = d["running"] as? Bool ?? false
         due_in = d["due_in"] as? Int ?? 0
         level = d["level"] as? String ?? "task"
-        tokens = (d["tokens"] as? [String: Any])?.compactMapValues { $0 as? Int }
     }
 }
 
