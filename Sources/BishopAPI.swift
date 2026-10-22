@@ -212,6 +212,10 @@ struct ToolView {
 struct SessionInfo: Identifiable, Hashable {
     var id: String
     var title: String
+    /// What the row used to show as its only line: the date plus the opening words.
+    /// It stays under the name, because two chats the titler called the same thing
+    /// are told apart by WHEN and WHAT, not by the name.
+    var subtitle: String = ""
 }
 
 /// A background job, as GET /api/jobs reports it. A job is name + system prompt +
@@ -472,7 +476,8 @@ final class BishopAPI: ObservableObject {
         levels = s["levels"] as? [String] ?? levels
         sessions = (s["sessions"] as? [[String: Any]] ?? []).compactMap {
             guard let id = $0["id"] as? String else { return nil }
-            return SessionInfo(id: id, title: $0["title"] as? String ?? id)
+            return SessionInfo(id: id, title: $0["title"] as? String ?? id,
+                               subtitle: $0["subtitle"] as? String ?? "")
         }
         if let u = s["usage"] as? [String: Any] { applyStats(u) }
     }

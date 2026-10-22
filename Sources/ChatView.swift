@@ -435,7 +435,8 @@ struct ChatView: View {
                         drawerChat(id: "", title: events.isEmpty ? "New chat" : "This chat", selected: true)
                     }
                     ForEach(api.sessions) { s in
-                        drawerChat(id: s.id, title: s.title, selected: s.id == api.session)
+                        drawerChat(id: s.id, title: s.title, subtitle: s.subtitle,
+                                   selected: s.id == api.session)
                     }
                     if api.sessions.isEmpty && !api.session.isEmpty {
                         Text("Nothing saved yet").font(.footnote).foregroundStyle(.secondary)
@@ -474,21 +475,33 @@ struct ChatView: View {
     /// margin are written once. A chat has no symbol: an icon on every line of a
     /// list of conversations is wallpaper, while "New chat" and "Settings" need
     /// one to be told apart at a glance.
-    private func drawerRow(_ title: String, _ symbol: String, action: @escaping () -> Void,
+    ///
+    /// `subtitle` is the chat's old label (date + opening words) under its NAME,
+    /// smaller and dimmer: the name says what the chat was about, the subtitle
+    /// still says which one it was. The fixed rows pass none, so they keep one line.
+    private func drawerRow(_ title: String, _ symbol: String, subtitle: String = "",
+                           action: @escaping () -> Void,
                            selected: Bool = false) -> some View {
         Button(action: action) {
             HStack(spacing: 12) {
                 if !symbol.isEmpty { Image(systemName: symbol).font(.system(size: 16)).frame(width: 22) }
-                Text(title).font(.system(size: 16)).lineLimit(1)
-                    // NOT truncated at the panel's edge: the drawer is the layer UNDER
-                    // the chat, so a long title runs on until the chat covers it. Alex,
-                    // with the truncating build in his hand: "text at left ends with
-                    // ... before it reaches chat. I want text to go bellow chat" - his
-                    // screenshot put the "..." at 274pt while the chat's edge is at
-                    // 302pt, i.e. ~30pt of black between the two, spent on a "..." the
-                    // reader did not need. The panel clips this at its own edge (see
-                    // `panel`), which IS where the chat's lid comes to rest.
-                    .fixedSize(horizontal: true, vertical: false)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title).font(.system(size: 16)).lineLimit(1)
+                        // NOT truncated at the panel's edge: the drawer is the layer UNDER
+                        // the chat, so a long title runs on until the chat covers it. Alex,
+                        // with the truncating build in his hand: "text at left ends with
+                        // ... before it reaches chat. I want text to go bellow chat" - his
+                        // screenshot put the "..." at 274pt while the chat's edge is at
+                        // 302pt, i.e. ~30pt of black between the two, spent on a "..." the
+                        // reader did not need. The panel clips this at its own edge (see
+                        // `panel`), which IS where the chat's lid comes to rest.
+                        .fixedSize(horizontal: true, vertical: false)
+                    if !subtitle.isEmpty {
+                        Text(subtitle).font(.system(size: 12))
+                            .foregroundStyle(.secondary).lineLimit(1)
+                            .fixedSize(horizontal: true, vertical: false)
+                    }
+                }
             }
             .padding(.leading, 16).padding(.trailing, 6).padding(.vertical, 13)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -499,9 +512,11 @@ struct ChatView: View {
         .foregroundStyle(.white)
     }
 
-    /// One chat in the list: the same row, named by the chat it opens.
-    private func drawerChat(id: String, title: String, selected: Bool) -> some View {
-        drawerRow(title, "", action: { request = MenuRequest(session: id) }, selected: selected)
+    /// One chat in the list: the same row, named by the chat it opens and captioned
+    /// by the date + opening words it used to be named by.
+    private func drawerChat(id: String, title: String, subtitle: String = "", selected: Bool) -> some View {
+        drawerRow(title, "", subtitle: subtitle,
+                  action: { request = MenuRequest(session: id) }, selected: selected)
     }
 
     private func drawerCaption(_ text: String) -> some View {
