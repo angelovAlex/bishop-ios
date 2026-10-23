@@ -27,6 +27,7 @@ struct ChatView: View {
     @State private var placing = false        // a just-sent message is on its way to the top
     @State private var geo = ScrollGeo()      // the scroll's raw numbers, for the debug strip
     @FocusState private var typing: Bool      // the composer's focus, so send() can drop the keyboard
+    @Environment(\.scenePhase) private var scene   // foreground/background, reported to the Mac
 
     var body: some View {
         // The bars hang off the SCROLL VIEW itself, via safeAreaBar - see
@@ -135,6 +136,8 @@ struct ChatView: View {
                 // relaunched by hand.
                 await reload()
                 PushNotifier.shared.start(api: api)
+                // onChange does not fire for the launch value, so say where we are once.
+                PushNotifier.shared.presence(foreground: scene == .active)
                 while !api.connected && !Task.isCancelled {
                     try? await Task.sleep(nanoseconds: 4_000_000_000)
                     if Task.isCancelled { break }
@@ -142,6 +145,13 @@ struct ChatView: View {
                 }
             }
             .onAppear { startStream() }
+            // Where the app IS, told to the Mac: a turn that ends while the app is
+            // in the background pushes a banner (webui.notify_turn_end). Inactive is
+            // reported as background on purpose - the phone is not being looked at
+            // when it is covered or mid-swipe.
+            .onChange(of: scene) { _, now in
+                PushNotifier.shared.presence(foreground: now == .active)
+            }
             .sheet(item: Binding(get: { fullPicture.map(PicturePath.init) }, set: { fullPicture = $0?.path })) {
                 PictureView(path: $0.path, api: api)
             }

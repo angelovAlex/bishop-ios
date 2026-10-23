@@ -53,6 +53,34 @@ final class PushNotifier: NSObject, ObservableObject, UNUserNotificationCenterDe
         status = "APNs: \(error.localizedDescription)"
     }
 
+    /// Tell the Mac whether this app is in front of its owner, now and every 20 s
+    /// while it is. The Mac pushes the end of a finished turn only when this says
+    /// the app is in the BACKGROUND (the report goes stale on its own in 45 s, so a
+    /// killed app stops claiming anything). Called from ChatView's scenePhase.
+    private var beat: Task<Void, Never>?
+
+    func presence(foreground: Bool) {
+        // One heartbeat at a time: the old one is cancelled before a new scene
+        // change starts another, so two loops can never disagree about the phone.
+        beat?.cancel()
+        beat = nil
+        guard let api else { return }
+        beat = Task {
+            let report: () async -> Void = {
+                // A push report is a courtesy: a Mac that is asleep or a token that
+                // is wrong must never show up as an error in the chat.
+                _ = try? await api.post("/api/presence", ["foreground": foreground])
+            }
+            await report()
+            guard foreground else { return }
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 20_000_000_000)
+                if Task.isCancelled { return }
+                await report()
+            }
+        }
+    }
+
     /// Show the banner even while the app is open, so a push is never silent.
     func userNotificationCenter(_ center: UNUserNotificationCenter,
                                willPresent notification: UNNotification,
