@@ -1663,12 +1663,12 @@ struct EditChip: View {
     /// asked for the read to stop dumping a whole file into the transcript on
     /// arrival - and a search is the same case, at 300 hits.
     ///
-    /// A COMMAND that a front end is drawing as it runs (`stream`) is born open
-    /// too and STAYS open: the output arriving is the whole point of the row, and
-    /// folding it would hide the very thing being watched. That is not a rule of
-    /// its own here - `open` is what it always was, and `stream` is carried on the
-    /// row from the moment its call arrived, through the result, so nothing flips
-    /// it shut when the command finishes.
+    /// A COMMAND is born folded too, and stays folded - Alex, 2026-10-22: "run_shell
+    /// chips keep collapsed when ran". It used to open itself while the command
+    /// ran (`stream`), which made a turn of several commands one long wall of
+    /// output nobody asked for; the chip says Running either way, and the output
+    /// is one tap away. `stream` still travels on the row - it is what the wheel
+    /// in the chip hangs on - but it no longer decides whether the box is open.
     @State private var tapped: Bool? = nil
     @State private var showCall = false
 
@@ -1679,10 +1679,11 @@ struct EditChip: View {
     /// It is the only chip drawn while it is STILL HAPPENING - the call arrives
     /// before the tool has answered, and that is what the wheel is for.
     private var shell: Bool { view.kind == "shell" }
-    /// Is this command being drawn WHILE it runs? Then its row is born open, and
-    /// what it draws is the output so far (`liveRows`) until the result lands.
+    /// Is this command being drawn WHILE it runs? Then its chip carries the wheel
+    /// and what the box would draw is the output so far (`liveRows`) until the
+    /// result lands - but the box starts folded, like a read and a search.
     private var streaming: Bool { shell && view.stream }
-    private var open: Bool { tapped ?? (streaming || !(read || search || shell)) }
+    private var open: Bool { tapped ?? !(read || search || shell) }
     /// A command's lines: the LIVE output while it runs, the result's own once it
     /// has answered. `liveRows` is empty in every case but a running command, so
     /// this is the result's rows in practice - and the two can never be shown at
