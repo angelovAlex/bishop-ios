@@ -6,10 +6,27 @@
 //
 
 import SwiftUI
+import UserNotifications
 
 @main
 struct BishopApp: App {
+    // APNs answers through the UIApplicationDelegate callbacks, so the app needs
+    // one even though it is SwiftUI: the delegate hands the device token to
+    // PushNotifier (see Push.swift).
+    @UIApplicationDelegateAdaptor(AppDelegate.self) var delegate
     var body: some Scene {
         WindowGroup { ChatView() }
+    }
+}
+
+final class AppDelegate: NSObject, UIApplicationDelegate {
+    func application(_ app: UIApplication,
+                     didRegisterForRemoteNotificationsWithDeviceToken token: Data) {
+        PushNotifier.shared.got(token: token)
+    }
+
+    func application(_ app: UIApplication,
+                     didFailToRegisterForRemoteNotificationsWithError error: Error) {
+        PushNotifier.shared.failed(error)
     }
 }

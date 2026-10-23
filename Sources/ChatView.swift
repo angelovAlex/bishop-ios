@@ -134,6 +134,7 @@ struct ChatView: View {
                 // attempt would leave the app sitting on "Not connected" until it was
                 // relaunched by hand.
                 await reload()
+                PushNotifier.shared.start(api: api)
                 while !api.connected && !Task.isCancelled {
                     try? await Task.sleep(nanoseconds: 4_000_000_000)
                     if Task.isCancelled { break }
