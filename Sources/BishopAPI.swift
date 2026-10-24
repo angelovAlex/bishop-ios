@@ -242,6 +242,9 @@ struct Job: Identifiable, Hashable {
     var last_run: Double?
     var next_run: Double?
     var running = false             // a run of it is queued or in flight right now
+    /// One-off work (a task the mind delegated), not a schedule: it runs once and is
+    /// shown in Activity, never in the Jobs list. Sent by the server since 2026-10-23.
+    var once = false
     var due_in = 0                  // seconds until its next run, from the SERVER's clock
     /// "tool" (0), "task" (1) or "think" (2) - see jobs.LEVELS. The default is what a
     /// record written before levels existed is, and it is what that record still runs as.
@@ -264,6 +267,7 @@ struct Job: Identifiable, Hashable {
         last_run = d["last_run"] as? Double
         next_run = d["next_run"] as? Double
         running = d["running"] as? Bool ?? false
+        once = d["once"] as? Bool ?? false
         due_in = d["due_in"] as? Int ?? 0
         level = d["level"] as? String ?? "task"
     }

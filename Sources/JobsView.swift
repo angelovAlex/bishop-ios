@@ -91,15 +91,32 @@ struct JobsView: View {
     }
 
     @ViewBuilder private var jobsSection: some View {
-        Section("Jobs") {
-            if let jobs = state?.jobs, jobs.isEmpty {
-                Text("No jobs yet. Ask Bishop in the chat to create one - \"every "
-                     + "morning at 7, check the weather and write it down\".")
+        // JOBS LISTS SCHEDULES. A one-off task (the mind's delegated work) has already
+        // run and belongs in Activity, not under a heading that promises a next run -
+        // the same rule the web page follows (Alex, 2026-10-23). Its absence is counted
+        // in the footer rather than left silent, so nothing looks like it vanished.
+        let all = state?.jobs ?? []
+        let sched = all.filter { !$0.once }
+        let ones = all.count - sched.count
+        Section {
+            if sched.isEmpty {
+                Text(ones > 0
+                     ? "No recurrent jobs. \(ones) one-off task\(ones == 1 ? "" : "s") "
+                       + "below in Activity."
+                     : "No jobs yet. Ask Bishop in the chat to create one - \"every "
+                       + "morning at 7, check the weather and write it down\".")
                     .font(.footnote).foregroundStyle(.secondary)
             }
-            ForEach(state?.jobs ?? []) { job in
+            ForEach(sched) { job in
                 Button { openJob(job.id) } label: { jobRow(job) }
                     .buttonStyle(.plain).foregroundStyle(.primary)
+            }
+        } header: {
+            Text("Jobs")
+        } footer: {
+            if ones > 0 {
+                Text("\(ones) one-off task\(ones == 1 ? "" : "s") not listed - "
+                     + "\(ones == 1 ? "its run is" : "their runs are") in Activity.")
             }
         }
     }

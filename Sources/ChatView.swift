@@ -136,6 +136,11 @@ struct ChatView: View {
                 // relaunched by hand.
                 await reload()
                 PushNotifier.shared.start(api: api)
+                // LAUNCH ARGUMENT `-jobs`: open straight on the Jobs screen. Only for
+                // looking at that screen from the Mac - a simulator tap needs the Mac's
+                // own cursor, which a locked screen does not hand out, so without this
+                // the Jobs UI could only be judged from the phone by hand.
+                if CommandLine.arguments.contains("-jobs") { path = [.jobs] }
                 // onChange does not fire for the launch value, so say where we are once.
                 PushNotifier.shared.presence(foreground: scene == .active)
                 while !api.connected && !Task.isCancelled {
