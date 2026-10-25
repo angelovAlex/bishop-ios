@@ -17,6 +17,8 @@ struct ChatView: View {
     @State private var fullPicture: String?
     @State private var path: [ChatView.Screen] = []   // what the back menu pushed
     @State private var request: MenuRequest?  // what a menu row asked for; see carry(_:)
+    @State private var doomed: String?        // a chat the drawer asked to remove, awaiting a yes
+    @State private var doomedTitle = ""       // ...and its name, so the alert says WHICH chat
     @State private var sidebar = false        // the drawer: chats, New chat, Settings
     @State private var mine: UUID?            // a just-sent message, to be put at the top
     @State private var content: CGFloat = 0   // how tall the transcript is
@@ -118,6 +120,19 @@ struct ChatView: View {
         }
         .background(Color.black)
         .preferredColorScheme(.dark)
+        // The yes/no hangs off the OUTER ZStack, after the black - never off the
+        // chat's NavigationStack (see removalAlert), and not as a child inside it
+        // (a zero-size Color.clear there made the alert shrink to the top-left).
+        .alert(doomedTitle.isEmpty ? "Remove this chat?" : "Remove \u{201C}\(doomedTitle)\u{201D}?",
+               isPresented: Binding(get: { doomed != nil },
+                                    set: { if !$0 { doomed = nil } })) {
+            Button("Remove", role: .destructive) {
+                if let id = doomed { doomed = nil; Task { await remove(id) } }
+            }
+            Button("Cancel", role: .cancel) { doomed = nil }
+        } message: {
+            Text("It is moved to the deleted folder on the Mac, not destroyed.")
+        }
         .onChange(of: request) { _, r in
             guard let r else { return }
             request = nil                    // one tap, one request
@@ -160,6 +175,26 @@ struct ChatView: View {
             .sheet(item: Binding(get: { fullPicture.map(PicturePath.init) }, set: { fullPicture = $0?.path })) {
                 PictureView(path: $0.path, api: api)
             }
+    }
+
+    /// Carry out a removal, then follow the Mac: the server answers with the chat
+    /// this client is on now, which is NOT the removed one when that was on screen.
+    /// `reload()` is what redraws the transcript of wherever it landed.
+    ///
+    /// A failure leaves the row in place, which is the truth - the chat is still
+    /// there. The picker is updated from the reply itself (see BishopAPI.delete),
+    /// so the drawer loses the row without waiting for a full refresh.
+    private func remove(_ id: String) async {
+        let wasOpen = api.session == id
+        guard let next = await api.delete(session: id) else {
+            events.append(ChatEvent(kind: .info, text: "Could not remove that chat."))
+            return
+        }
+        if wasOpen {
+            await open(next)
+        } else {
+            await api.refresh()
+        }
     }
 
     // MARK: header
@@ -530,9 +565,44 @@ struct ChatView: View {
 
     /// One chat in the list: the same row, named by the chat it opens and captioned
     /// by the date + opening words it used to be named by.
+    ///
+    /// A LONG PRESS offers to remove it (Alex: "I likes how you had press and hold
+    /// before and a menu showed up, we can add more things into that manu later").
+    /// The contextMenu is attached to the ROW and the row is a Button, so the menu
+    /// waits for the long press and the tap still opens the chat - the two do not
+    /// fight, which is the whole reason this is the right instrument rather than a
+    /// swipe or an edit mode.
+    ///
+    /// The UNSAVED chat (id "") has no files on the Mac, so it gets no menu: there
+    /// is nothing to move, and an item that silently does nothing is worse than a
+    /// menu that is not there.
+    @ViewBuilder
     private func drawerChat(id: String, title: String, subtitle: String = "", selected: Bool) -> some View {
-        drawerRow(title, "", subtitle: subtitle,
-                  action: { request = MenuRequest(session: id) }, selected: selected)
+        let row = drawerRow(title, "", subtitle: subtitle,
+                            action: { request = MenuRequest(session: id) }, selected: selected)
+        if id.isEmpty {
+            row
+        } else {
+            row.contextMenu {
+                Button(role: .destructive) { askDelete(id, title) } label: {
+                    Label("Remove chat", systemImage: "trash")
+                }
+            }
+        }
+    }
+
+    /// The menu asks first: removing IS reversible (the Mac moves the chat to
+    /// logs/deleted/), but not from inside this app, so a mis-tap would cost a trip
+    /// to the Mac. The words say what really happens, so "remove" is not read as
+    /// "the conversation is destroyed".
+    ///
+    /// The chat's NAME goes into the alert with it, and that is not decoration: on
+    /// 2026-10-24 three of Alex's real conversations were moved by mis-aimed taps,
+    /// and the alert that asked "Remove this chat?" said nothing about which one,
+    /// so there was no way to notice before answering yes.
+    private func askDelete(_ id: String, _ title: String) {
+        doomedTitle = title
+        doomed = id
     }
 
     private func drawerCaption(_ text: String) -> some View {

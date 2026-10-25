@@ -713,6 +713,27 @@ final class BishopAPI: ObservableObject {
         _ = try? await post("/api/chat", ["session": id])
     }
 
+    /// Remove a chat from the drawer. A MOVE on the Mac, not a delete: its files
+    /// go to logs/deleted/, so the conversation still exists and a hand can bring
+    /// it back - which is why the app may do this without asking the Mac first.
+    ///
+    /// Answers the session THAT client is on now, which is not the removed one
+    /// when it was the chat on screen: the server has already placed it somewhere
+    /// else, and opening that id is how the app follows. Nil means the request
+    /// failed (the chat is still there), and the caller says so instead of
+    /// pretending the row is gone.
+    func delete(session id: String) async -> String? {
+        guard let r = try? await post("/api/chat/delete", ["session": id]) else { return nil }
+        if let list = r["sessions"] as? [[String: Any]] {
+            sessions = list.compactMap {
+                guard let sid = $0["id"] as? String else { return nil }
+                return SessionInfo(id: sid, title: $0["title"] as? String ?? sid,
+                                   subtitle: $0["subtitle"] as? String ?? "")
+            }
+        }
+        return r["session"] as? String
+    }
+
     func setEffort(_ e: String) async {
         if let r = try? await post("/api/effort", ["effort": e]) {
             effort = r["effort"] as? String ?? effort
