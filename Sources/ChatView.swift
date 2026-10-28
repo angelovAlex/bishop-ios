@@ -1748,12 +1748,15 @@ struct EditChip: View {
     /// asked for the read to stop dumping a whole file into the transcript on
     /// arrival - and a search is the same case, at 300 hits.
     ///
-    /// A COMMAND is born folded too, and stays folded - Alex, 2026-10-22: "run_shell
-    /// chips keep collapsed when ran". It used to open itself while the command
-    /// ran (`stream`), which made a turn of several commands one long wall of
-    /// output nobody asked for; the chip says Running either way, and the output
-    /// is one tap away. `stream` still travels on the row - it is what the wheel
-    /// in the chip hangs on - but it no longer decides whether the box is open.
+    /// A COMMAND follows its own life: open WHILE IT RUNS, folded the moment it
+    /// has answered - Alex, 2026-10-27: "when run_shell is running on ios, make it
+    /// open by default, and close it when finished." The box is therefore open for
+    /// exactly the run (`ok` is nil until the result lands) and folds itself when
+    /// the answer arrives, so a turn of several commands does not leave a wall of
+    /// finished output behind. A row replayed from a stored session arrives with
+    /// `ok` already set and is born folded, so nothing flickers open on replay.
+    /// `stream` still travels on the row - it is what the wheel in the chip hangs
+    /// on - but it does not decide whether the box is open.
     @State private var tapped: Bool? = nil
     @State private var showCall = false
 
@@ -1764,11 +1767,16 @@ struct EditChip: View {
     /// It is the only chip drawn while it is STILL HAPPENING - the call arrives
     /// before the tool has answered, and that is what the wheel is for.
     private var shell: Bool { view.kind == "shell" }
-    /// Is this command being drawn WHILE it runs? Then its chip carries the wheel
-    /// and what the box would draw is the output so far (`liveRows`) until the
-    /// result lands - but the box starts folded, like a read and a search.
+    /// Is this command being drawn WHILE it runs? Then what the box draws is the
+    /// output so far (`liveRows`) until the result lands, and the box is open -
+    /// see `open` below.
     private var streaming: Bool { shell && view.stream }
-    private var open: Bool { tapped ?? !(read || search || shell) }
+    /// Open while running, closed when finished: `ok` is nil until the result
+    /// lands, so this is true for exactly the run. A running command is the one
+    /// chip with something to show before it has an answer - its output, arriving
+    /// line by line - and once it has one the reader should not be pushed further
+    /// down a wall of finished output.
+    private var open: Bool { tapped ?? (shell && ok == nil) }
     /// A command's lines: the LIVE output while it runs, the result's own once it
     /// has answered. `liveRows` is empty in every case but a running command, so
     /// this is the result's rows in practice - and the two can never be shown at
