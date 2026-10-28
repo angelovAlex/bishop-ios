@@ -1602,19 +1602,33 @@ struct ThoughtBlock: View {
                 withAnimation(.easeInOut(duration: 0.15)) { expanded.toggle() }
             } label: {
                 HStack(spacing: 6) {
-                    Text("▸").font(.caption2)      // the page's closed-fold marker
-                    // 14pt, the size of a chip's own label ("Running", "Ran,
-                    // "Read") - Alex, 2026-10-27: "make thinking chip to be same
-                    // font size as 'running'". It was .caption (12pt) and read as
-                    // a footnote beside the rows it sits between.
+                    // The marker sits in the same 12pt LEAD SLOT a chip puts its
+                    // tick (or its wheel) in, so the two labels start on one line
+                    // - Alex, 2026-10-27: "it is not aligned to left, not same as
+                    // other chips". Bare, the marker is ~7pt narrower than a tick
+                    // and dragged "thought" left of every "Ran". Measured on the
+                    // simulator: slot 12 puts both labels at x = 25, slot 10.5 puts
+                    // the thought label at 20 - this number is the one that aligns.
+                    Text("▸").font(.caption2)
+                        .frame(width: 12, alignment: .leading)
+                    // 14pt, the size of a chip's own label - Alex: "make thinking
+                    // chip to be same font size as 'running'". And the chip's ink
+                    // exactly (Color(white: 0.62)): .gray measured 0.22 white
+                    // against the chip label's 0.62, so with the size right the
+                    // label was still visibly a different grey.
                     Text(label).font(.system(size: 14))
-                }.foregroundStyle(.gray)
+                }.foregroundStyle(ThoughtBlock.ink)
             }
+            .buttonStyle(.plain)
             if show {
                 if expanded { whole } else { liveParagraph }
             }
         }
     }
+
+    /// A chip label's own grey, named once: the thought line and the rows around
+    /// it must not be two different greys.
+    static let ink = Color(white: 0.62)
 
     /// While a thought is being written, only its LAST PARAGRAPH is on screen -
     /// the line Bishop is on now, the way Apollo streams a reasoning summary. The
