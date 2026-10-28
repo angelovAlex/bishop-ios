@@ -1603,7 +1603,11 @@ struct ThoughtBlock: View {
             } label: {
                 HStack(spacing: 6) {
                     Text("▸").font(.caption2)      // the page's closed-fold marker
-                    Text(label).font(.caption)
+                    // 14pt, the size of a chip's own label ("Running", "Ran,
+                    // "Read") - Alex, 2026-10-27: "make thinking chip to be same
+                    // font size as 'running'". It was .caption (12pt) and read as
+                    // a footnote beside the rows it sits between.
+                    Text(label).font(.system(size: 14))
                 }.foregroundStyle(.gray)
             }
             if show {
