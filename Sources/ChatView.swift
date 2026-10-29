@@ -22,6 +22,8 @@ struct ChatView: View {
     @State private var sidebar = false        // the drawer: chats, New chat, Settings
     @State private var mine: UUID?            // a just-sent message, to be put at the top
     @State private var content: CGFloat = 0   // how tall the transcript is
+    @State private var slack: CGFloat = 0     // gap that holds height a folded row gave back
+    @State private var rowsSeen: CGFloat = 0  // the rows' height at the last measurement
     @State private var viewport: CGFloat = 0  // ...and how much room it has
     @State private var following = true       // follow the newest text: the reader is at the bottom
     @State private var belowFold = false      // ...and the newest text is below the fold right now
@@ -290,7 +292,7 @@ struct ChatView: View {
             Text("follow\(following ? "1" : "0") below\(belowFold ? "1" : "0") drag\(dragging ? "1" : "0") place\(placing ? "1" : "0")")
                 .font(.system(size: 10, design: .monospaced))
             Spacer()
-            Text("cc\(Int(geo.content)) ct\(Int(geo.container)) off\(Int(geo.offset)) vis\(Int(geo.visibleMaxY)) ins\(Int(geo.bottomInset))")
+            Text("cc\(Int(geo.content)) ct\(Int(geo.container)) off\(Int(geo.offset)) vis\(Int(geo.visibleMaxY)) ins\(Int(geo.bottomInset)) sl\(Int(slack))")
                 .font(.system(size: 10, design: .monospaced))
         }
         .foregroundStyle(following ? .green : .orange)
@@ -631,7 +633,6 @@ struct ChatView: View {
                         // connected.
                         NotConnectedRow(api: api)
                     }
-                    Color.clear.frame(height: 1).id("bottom")
                 }
                 // No horizontal padding: the transcript runs edge to edge
                 // (Alex's ask), because the rows that need a margin carry it
@@ -642,9 +643,18 @@ struct ChatView: View {
                 // a stripe of nothing) keep the full width.
                 .padding(.horizontal, 0).padding(.top, 8)
                 .frame(maxWidth: .infinity, alignment: .leading)
+                // The ROWS alone are measured, and the fold's gap sits BELOW the
+                // measurement. Inside the stack it was part of its own input -
+                // grow the gap, the height grows, the reading changes - and the
+                // log showed it ringing: cc alternating +-46 for as long as the
+                // screen was left alone.
                 .background(GeometryReader { g in
-                    Color.clear.onChange(of: g.size.height) { _, h in content = h }
+                    Color.clear.onChange(of: g.size.height) { _, h in
+                        holdFoldedHeight(h, proxy)
+                    }
                 })
+                Color.clear.frame(height: slack)
+                Color.clear.frame(height: 1).id("bottom")
             }
             .background(GeometryReader { g in
                 Color.clear.onChange(of: g.size.height) { _, h in viewport = h }
@@ -802,6 +812,47 @@ struct ChatView: View {
             withAnimation(.linear(duration: 0.12)) {
                 proxy.scrollTo("bottom", anchor: .bottom)
             }
+        }
+    }
+
+    /// A row that FOLDS (a thought at the end of its turn, a run_shell box once its
+    /// result lands) hands back every point of height it was using, and the
+    /// transcript is pinned to its END - so losing height slides the whole
+    /// conversation down, which reads as "it scrolled the wrong way". Alex, who
+    /// named the rule: "if it allocated space, it should not remove it from scroll
+    /// height".
+    ///
+    /// Hence ONE transparent gap, `slack`, laid out BELOW the rows and above the
+    /// bottom sentinel. Height the rows give back is added to it, height they take
+    /// is subtracted from it (floored at 0, so the gap is eaten first and new text
+    /// appears where the gap was). Content height is therefore unchanged across a
+    /// fold and the rows above keep their exact position.
+    ///
+    /// It is geometry, not a scroll rule, so it holds for every row that folds,
+    /// including ones written later. `h` is the ROWS only - the gap is laid out
+    /// below their measured view, not inside it. Inside the stack it was part of
+    /// its own input (grow the gap, the height grows, the reading changes) and the
+    /// log showed the ring: cc alternating +-46 for as long as the screen was left
+    /// alone.
+    private func holdFoldedHeight(_ h: CGFloat, _ proxy: ScrollViewProxy) {
+        let step = h - rowsSeen
+        rowsSeen = h
+        content = h + slack                 // the debug strip and the fallback want all of it
+        guard abs(step) > 0.5 else { return }
+        // A shrink keeps its height; a growth spends the gap first.
+        slack = max(slack - step, 0)
+        // Growing the gap is HALF the job and, on its own, does nothing: the fold
+        // has already been laid out, and while the content was short the scroll
+        // view clamped its offset down to the new (shorter) bottom. Every point of
+        // that clamp is the jump - measured, 140pt on the thought fold. Putting
+        // the height back and then re-pinning to the bottom restores the offset
+        // that clamp spent, so the rows above do not move at all.
+        guard step < 0, following else { return }
+        DispatchQueue.main.async {
+            guard following, !dragging, !placing else { return }
+            var t = Transaction()
+            t.disablesAnimations = true
+            withTransaction(t) { proxy.scrollTo("bottom", anchor: .bottom) }
         }
     }
 
@@ -1086,6 +1137,8 @@ struct ChatView: View {
         await api.newChat()
         events = []
         events = [ChatEvent(kind: .info, text: "New conversation.")]
+        slack = 0                           // a replaced transcript holds nothing
+        rowsSeen = 0
     }
 
     /// Do ONE thing a drawer row asked for. The request is cleared before the work
@@ -1109,6 +1162,8 @@ struct ChatView: View {
         if !api.connected { await api.connect() }
         if let (list, sess) = try? await api.events(session: nil) {
             events = list
+            slack = 0                    // a DIFFERENT transcript: hold nothing from
+            rowsSeen = 0                 // the one before it (and growth floors at 0)
             api.session = sess
             await api.refresh()          // counters, session list, effort
         }
