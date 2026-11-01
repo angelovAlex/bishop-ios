@@ -2232,6 +2232,12 @@ struct Collapsible: View {
 struct RecallRow: View {
     let text: String
     @State private var open = false
+    /// Draws the fold's state beside the label - the tap debug for the 2026-11-01
+    /// bug where a tap on this row did nothing. Flip to false once it is settled.
+    private let showTapDebug = false
+    /// The block's own height, so a short recall is drawn whole and a long one is
+    /// cut at `blockCap` - see the note in the fold.
+    @State private var blockH: CGFloat = 0
 
     private var label: String {
         let first = text.split(separator: "\n", maxSplits: 1).first.map(String.init) ?? ""
@@ -2246,15 +2252,43 @@ struct RecallRow: View {
                 Text(label).font(.system(size: 11, design: .monospaced)).lineLimit(1)
             }
             .foregroundStyle(.gray)
+            // The WHOLE LINE opens the fold, not just its two words: the label is
+            // a short line on a wide screen and a tap on the space beside it did
+            // nothing (measured on the simulator, three taps at the row's own
+            // height and one to the right of the text). A row is what a finger
+            // aims at.
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
             .onTapGesture { withAnimation(.easeInOut(duration: 0.15)) { open.toggle() } }
+            // ...and it says so on screen for the length of the test: a tap that
+            // registers but does not toggle is indistinguishable from a tap that
+            // never landed, and that was 8 taps of guessing on 2026-11-01.
+            .overlay(alignment: .trailing) {
+                if showTapDebug { Text(open ? "OPEN" : "shut").font(.caption2).foregroundStyle(.orange) }
+            }
             if open {
                 // CAPPED, like a command's box (`blockCap`): a recall pastes the
                 // memory the answer was built on, which can be a whole topic file,
                 // and it used to push the question it belongs to off the screen.
                 // It scrolls inside itself instead - Alex, 2026-11-01: "recall chip
                 // has no height limit".
-                ScrollView { Text(text).frame(maxWidth: .infinity, alignment: .leading) }
-                    .frame(maxHeight: blockCap)
+                //
+                // The height is MEASURED and then clamped, not left to `maxHeight`:
+                // a ScrollView has no height of its own, so `maxHeight` alone gives
+                // it nothing to be tall with and the block came up one line high
+                // (watched on the simulator at 09:34).
+                //
+                // ...and the FIRST frame must not depend on that measurement. With
+                // `min(blockH, blockCap)` the frame starts at ZERO, the text is
+                // never laid out, and `blockH` therefore stays 0 for ever: the row
+                // said OPEN and drew nothing (caught at 09:52 by the tap marker).
+                // So the cap is the default until there is a real figure, which
+                // gives the text somewhere to be measured in.
+                ScrollView { Text(text).frame(maxWidth: .infinity, alignment: .leading)
+                    .background(GeometryReader { g in
+                        Color.clear.onChange(of: g.size.height) { _, h in blockH = h }
+                    }) }
+                    .frame(maxHeight: blockH > 1 ? min(blockH, blockCap) : blockCap)
                     .font(.system(size: 11, design: .monospaced))
                     .foregroundStyle(Color(white: 0.5))
                     .textSelection(.enabled)
