@@ -1434,7 +1434,17 @@ struct EventRow: View {
             // keeps its text off the screen's right edge.
             VStack(alignment: .trailing, spacing: 6) {
                 if !event.text.isEmpty {
+                    // Alex: "I see copy and share when I press on the answer
+                    // bubble but I don't see it on my input bubbles". The
+                    // answer's menu is not a menu this app draws - it is what
+                    // iOS offers for SELECTABLE text, and the answer has had
+                    // `.textSelection(.enabled)` since it was written while the
+                    // user's bubble never did. Without it a long press on his
+                    // own words is a long press on nothing, which is why his
+                    // side echoed what he had just typed instead of letting him
+                    // take it away.
                     Text(event.text).font(.system(size: 15, design: .monospaced))
+                        .textSelection(.enabled)
                         .padding(.horizontal, 14).padding(.vertical, 9)
                         .background(Color(white: 0.17)).clipShape(RoundedRectangle(cornerRadius: 20))
                 }
