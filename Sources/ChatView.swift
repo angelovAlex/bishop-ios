@@ -6,6 +6,17 @@
 import PhotosUI
 import SwiftUI
 
+/// How tall a block's folded-away content may get before it scrolls inside
+/// itself. A FRACTION of the screen rather than a number of points, so it is the
+/// same share of the transcript on every device: 0.4 is under half, which keeps
+/// the chip above it, the text around it and the composer at the bottom in sight
+/// together - such a block is a detail of the answer, never the page.
+///
+/// File-level because TWO views need it - a command's box and a recall's pasted
+/// memory (Alex, 2026-11-01: "recall chip has no height limit") - and a rule two
+/// views share belongs inside neither of them.
+let blockCap: CGFloat = UIScreen.main.bounds.height * 0.4
+
 struct ChatView: View {
     @StateObject private var api = BishopAPI()
     @State private var events: [ChatEvent] = []
@@ -1900,6 +1911,9 @@ struct EditChip: View {
     /// on - but it does not decide whether the box is open.
     @State private var tapped: Bool? = nil
     @State private var showCall = false
+    /// Has the run outlived `slowRun`? A command opens its box only after this
+    /// turns true - see `open`.
+    @State private var slow = false
 
     private var read: Bool { view.kind == "read" }
     private var search: Bool { view.kind == "search" }
@@ -1917,7 +1931,21 @@ struct EditChip: View {
     /// chip with something to show before it has an answer - its output, arriving
     /// line by line - and once it has one the reader should not be pushed further
     /// down a wall of finished output.
-    private var open: Bool { tapped ?? (shell && ok == nil) }
+    /// BUT NOT FOR A FAST COMMAND. Alex, 2026-11-01: "most of run_shell are very
+    /// fast and there is no point to open them and collaps in fraction of second.
+    /// Lets make it so that if command is less then 1 second it stays closed, and
+    /// only openes after 1 second." So the box waits `slowRun` before it opens at
+    /// all: a command answered inside that second is drawn folded from its first
+    /// frame, with no flash of a box opening and closing.
+    ///
+    /// The wait measures the RUN and nothing else: `ok` is nil for exactly the run
+    /// (the result is what sets it), and the timer checks it again before opening.
+    /// Nothing has to be cancelled either - once the answer has landed `open` is
+    /// false whatever `slow` says, so a fast command's timer expires into a row
+    /// that was already closed.
+    private var open: Bool { tapped ?? (shell && ok == nil && slow) }
+    /// How long a command may take before its box is worth opening.
+    private static let slowRun: UInt64 = 1_000_000_000     // 1s in nanoseconds
     /// A command's lines: the LIVE output while it runs, the result's own once it
     /// has answered. `liveRows` is empty in every case but a running command, so
     /// this is the result's rows in practice - and the two can never be shown at
@@ -2110,7 +2138,7 @@ struct EditChip: View {
                     // it. A fade of mine would have had to guess - a top fade on a
                     // box the reader is at the top of says "there is more above"
                     // when there is nothing.
-                    .frame(maxHeight: boxCap)
+                    .frame(maxHeight: blockCap)
                     .clipShape(RoundedRectangle(cornerRadius: 6))
                     .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Color(white: 0.16)))
                     .onTapGesture { showCall.toggle() }   // a second tap shows how it was called
@@ -2131,6 +2159,17 @@ struct EditChip: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        // A command's box waits `slowRun` before it opens (see `open`). Hung on
+        // the BODY and only there: the row appears with the CALL, so that is the
+        // run's own clock. Replayed rows arrive with `ok` set and are never
+        // timed, and a fast command's timer expires into an already closed row,
+        // which is why nothing has to cancel it.
+        .task {
+            guard shell, ok == nil else { return }
+            try? await Task.sleep(nanoseconds: Self.slowRun)
+            guard ok == nil else { return }
+            withAnimation(.easeInOut(duration: 0.15)) { slow = true }
+        }
     }
 
     /// The +/- marker in place of a line-number column: the column is a fifth of a
@@ -2139,12 +2178,6 @@ struct EditChip: View {
     private static func marked(_ r: ToolView.Row) -> String {
         r.tag == "hit" ? r.text : (r.tag == "add" ? "+ " : r.tag == "del" ? "- " : "  ") + r.text
     }
-    /// How tall the box may get before it scrolls inside itself. A FRACTION of
-    /// the screen rather than a number of points, so it is the same share of the
-    /// transcript on every device: 0.4 is under half, which keeps the chip above
-    /// it, the text around it and the composer at the bottom in sight together -
-    /// the box is a detail of the answer, never the page.
-    private var boxCap: CGFloat { UIScreen.main.bounds.height * 0.4 }
     private static let blue = Color(red: 0.35, green: 0.65, blue: 1.0)
     /// What a COMMAND's box is written in: the warm ink of a terminal prompt, the
     /// way the reference (VS Code's own transcript) paints it. A command is the
@@ -2215,9 +2248,17 @@ struct RecallRow: View {
             .foregroundStyle(.gray)
             .onTapGesture { withAnimation(.easeInOut(duration: 0.15)) { open.toggle() } }
             if open {
-                Text(text).font(.system(size: 11, design: .monospaced))
+                // CAPPED, like a command's box (`blockCap`): a recall pastes the
+                // memory the answer was built on, which can be a whole topic file,
+                // and it used to push the question it belongs to off the screen.
+                // It scrolls inside itself instead - Alex, 2026-11-01: "recall chip
+                // has no height limit".
+                ScrollView { Text(text).frame(maxWidth: .infinity, alignment: .leading) }
+                    .frame(maxHeight: blockCap)
+                    .font(.system(size: 11, design: .monospaced))
                     .foregroundStyle(Color(white: 0.5))
-                    .textSelection(.enabled).padding(.leading, 10)
+                    .textSelection(.enabled)
+                    .padding(.leading, 10)
             }
         }
     }
