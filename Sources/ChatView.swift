@@ -275,6 +275,11 @@ struct ChatView: View {
     /// release build carries none of it.
     private let showFollowDebug = false
 
+    /// How tall the fold's gap may get (see `holdFoldedHeight`). One screen is the
+    /// ceiling: a gap taller than that cannot be "the space a fold gave back", it
+    /// is dead space to scroll through.
+    private var slackCap: CGFloat { UIScreen.main.bounds.height }
+
     /// What the follow logic thinks, and the four numbers it is made of.
     ///
     /// Left: F `following` (the reader is at the newest text and autoscroll is
@@ -751,6 +756,9 @@ struct ChatView: View {
             // thinking block was using, so the block slides under the fold with no
             // text having changed.
             .onChange(of: viewport) { _, _ in follow(proxy) }
+            // The turn is over: nothing more is coming to eat the fold's reserve,
+            // so it is handed back rather than left as a hole below the answer.
+            .onChange(of: api.busy) { _, busy in if !busy { releaseSlack(proxy) } }
         }
     }
 
@@ -828,6 +836,22 @@ struct ChatView: View {
     /// appears where the gap was). Content height is therefore unchanged across a
     /// fold and the rows above keep their exact position.
     ///
+    /// IT IS A GAP, NOT A RATCHET (2026-10-31). The reserve exists to hold the
+    /// conversation still until the text that will eat it arrives, so it is
+    /// BOUNDED and it ENDS:
+    ///
+    ///  * `slackCap` - one screen. A gap taller than a screen cannot be "the space
+    ///    a fold gave back", it is dead space the reader has to scroll through.
+    ///  * a fold AFTER the turn is over reserves nothing: no text is coming to
+    ///    spend it. That was Alex's second report of the same evening - "chat
+    ///    extended by x3 and scrolled to very bottom showing empty black" -
+    ///    measured on the simulator: 282pt reserved at the instant a turn ended,
+    ///    and the transcript clamped down by it, leaving the hole in his
+    ///    screenshot.
+    ///  * while the reader is away from the bottom the gap drains, because nothing
+    ///    down there is being read.
+    ///  * `releaseSlack` clears whatever is left when the turn ends.
+    ///
     /// It is geometry, not a scroll rule, so it holds for every row that folds,
     /// including ones written later. `h` is the ROWS only - the gap is laid out
     /// below their measured view, not inside it. Inside the stack it was part of
@@ -839,8 +863,21 @@ struct ChatView: View {
         rowsSeen = h
         content = h + slack                 // the debug strip and the fallback want all of it
         guard abs(step) > 0.5 else { return }
-        // A shrink keeps its height; a growth spends the gap first.
-        slack = max(slack - step, 0)
+        // A shrink keeps its height, up to one screen - but ONLY while a turn is
+        // still running. The gap exists to hold the conversation still until the
+        // text that will eat it arrives; a fold that happens once the turn is
+        // over (the last thought folding as the answer closes it) has no such text
+        // behind it, and reserving for it is what left the empty black Alex
+        // photographed: measured on the simulator, 282pt reserved at the instant
+        // the turn ended, and nothing ever came to spend it.
+        if step < 0 { slack = api.busy ? min(slack - step, slackCap) : 0 }
+        else { slack = max(slack - step, 0) }
+        // ...and it is not kept at all when the reader is AWAY from the bottom:
+        // nothing below their viewport is being watched, and the content above it
+        // does not move when this does. That is the whole reserve spent, in one
+        // step rather than a drip - a drip has to survive many measurements to get
+        // anywhere, and there is nothing here for it to gain.
+        if !following { slack = 0 }
         // Growing the gap is HALF the job and, on its own, does nothing: the fold
         // has already been laid out, and while the content was short the scroll
         // view clamped its offset down to the new (shorter) bottom. Every point of
@@ -850,6 +887,27 @@ struct ChatView: View {
         guard step < 0, following else { return }
         DispatchQueue.main.async {
             guard following, !dragging, !placing else { return }
+            var t = Transaction()
+            t.disablesAnimations = true
+            withTransaction(t) { proxy.scrollTo("bottom", anchor: .bottom) }
+        }
+    }
+
+    /// Give the fold's reserve back, now that nothing is arriving. A turn has
+    /// ended: no new text is going to eat the gap, so it would stand as empty
+    /// space below the last line until the next turn's first token - which is
+    /// exactly the black Alex photographed on 2026-10-31. Removing it here is
+    /// safe IN THE SENSE THAT MATTERS: no fold is about to happen, so nothing
+    /// needs the height, and the clamp the removal causes is a scroll down of the
+    /// few points the gap still holds - not the multi-screen hole it was.
+    ///
+    /// Not when the reader is away from the bottom: they are not looking at the
+    /// end of the transcript, and pulling its offset would be a jump in a place
+    /// they did choose to be.
+    private func releaseSlack(_ proxy: ScrollViewProxy) {
+        guard slack > 0, following, !dragging, !placing else { return }
+        slack = 0
+        DispatchQueue.main.async {
             var t = Transaction()
             t.disablesAnimations = true
             withTransaction(t) { proxy.scrollTo("bottom", anchor: .bottom) }
@@ -1994,20 +2052,55 @@ struct EditChip: View {
                 if !bodyRows.isEmpty {
                     // Scrolls sideways rather than wrapping: a wrapped line pushes
                     // its continuation under the +/- marker, and the marker is what
-                    // the eye follows down the block.
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        VStack(spacing: 0) {
-                            ForEach(bodyRows) { r in
-                                Text(r.tag == "gap" ? "" : Self.marked(r))
-                                    .font(.system(size: 11, design: .monospaced))
-                                    .foregroundStyle(r.tag == "eq" ? Color(white: 0.55) : EditChip.fg(r.tag))
-                                    .lineLimit(1).fixedSize(horizontal: true, vertical: false)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                    .padding(.horizontal, 4).padding(.vertical, 0.5)
-                                    .background(EditChip.bg(r.tag))
+                    // the eye follows down the block. It scrolls DOWNWARDS too, and
+                    // is bounded - see the frame below the reader.
+                    ScrollViewReader { box in
+                        ScrollView([.horizontal, .vertical]) {
+                            VStack(spacing: 0) {
+                                    ForEach(Array(bodyRows.enumerated()), id: \.offset) { i, r in
+                                        Text(r.tag == "gap" ? "" : Self.marked(r))
+                                            .font(.system(size: 11, design: .monospaced))
+                                            .foregroundStyle(r.tag == "eq" ? Color(white: 0.55) : EditChip.fg(r.tag))
+                                            .lineLimit(1).fixedSize(horizontal: true, vertical: false)
+                                            .frame(maxWidth: .infinity, alignment: .leading)
+                                            .padding(.horizontal, 4).padding(.vertical, 0.5)
+                                            .background(EditChip.bg(r.tag))
+                                            .id(i)
+                                    }
+                                }
+                        }
+                        // A running command is read from its END, so the box
+                        // follows its own new lines the way a terminal does. One
+                        // turn later, because the new rows are not laid out yet
+                        // when the count changes and a scroll to an id that has
+                        // no position yet goes nowhere (measured: the box stayed
+                        // on its first screenful while the command ran).
+                        .onChange(of: bodyRows.count) { _, n in
+                            guard streaming, n > 0 else { return }
+                            DispatchQueue.main.async {
+                                var t = Transaction()
+                                t.disablesAnimations = true
+                                withTransaction(t) { box.scrollTo(n - 1, anchor: .bottom) }
                             }
                         }
                     }
+                    // THE BOX HAS A HEIGHT LIMIT. Alex, 2026-10-31: "run_shell
+                    // has no limit for height I think and can extend scroll
+                    // context by a lot" - MEASURED on the simulator: one command
+                    // at the server's own 80-row cap grew the transcript from
+                    // 2027 to 3180 (1153pt, a screen and a half), and folding it
+                    // left a gap of exactly that much empty black below the last
+                    // message. With `maxHeight` the box scrolls inside itself, so
+                    // nothing is missing and the transcript's height stops
+                    // depending on how loud the command was.
+                    //
+                    // Despite the frame, does it still OVERFLOW? The scroll
+                    // INDICATOR answers that, and it is the honest answer: it
+                    // appears exactly while there is more, at whichever edge has
+                    // it. A fade of mine would have had to guess - a top fade on a
+                    // box the reader is at the top of says "there is more above"
+                    // when there is nothing.
+                    .frame(maxHeight: boxCap)
                     .clipShape(RoundedRectangle(cornerRadius: 6))
                     .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Color(white: 0.16)))
                     .onTapGesture { showCall.toggle() }   // a second tap shows how it was called
@@ -2036,6 +2129,12 @@ struct EditChip: View {
     private static func marked(_ r: ToolView.Row) -> String {
         r.tag == "hit" ? r.text : (r.tag == "add" ? "+ " : r.tag == "del" ? "- " : "  ") + r.text
     }
+    /// How tall the box may get before it scrolls inside itself. A FRACTION of
+    /// the screen rather than a number of points, so it is the same share of the
+    /// transcript on every device: 0.4 is under half, which keeps the chip above
+    /// it, the text around it and the composer at the bottom in sight together -
+    /// the box is a detail of the answer, never the page.
+    private var boxCap: CGFloat { UIScreen.main.bounds.height * 0.4 }
     private static let blue = Color(red: 0.35, green: 0.65, blue: 1.0)
     /// What a COMMAND's box is written in: the warm ink of a terminal prompt, the
     /// way the reference (VS Code's own transcript) paints it. A command is the
